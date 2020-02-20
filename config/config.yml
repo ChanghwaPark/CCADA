@@ -4,18 +4,14 @@ data:
     office:
       network: resnet50 #ResNet50
       is_center: False
-      #      network_kwargs:
       num_classes: 31
       bottleneck_dim: 1024
-    #        width: 1024 # 1024
 
     office-home:
       network: resnet50 #ResNet50
       is_center: False  # True
-      #      network_kwargs:
       num_classes: 65
       bottleneck_dim: 2048
-    #        width: 2048  # 1024
 
 optimizer:
   init_lr: 0.001 # 0.004

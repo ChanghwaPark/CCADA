@@ -2,14 +2,14 @@ import torch
 import tqdm
 from torch import nn
 
-from preprocess.data_provider import get_data_loader, get_confident_data_loader
-from utils import summary_write_embeddings, summary_write_figures, prepare_categorical_data, AverageMeter, moment_update
+from preprocess.data_provider import get_data_loader
+from utils import summary_write_embeddings, summary_write_figures, AverageMeter, moment_update
 
 
 class Train:
     def __init__(self, model, model_ema, optimizer, lr_scheduler, group_ratios,
                  summary_writer, src_file, tgt_file, contrast_loss, key_memory,
-                 dim_weight=1.0,
+                 contrast_weight=1.0,
                  threshold=0.5,
                  batch_size=36,
                  eval_batch_size=36,
@@ -32,7 +32,7 @@ class Train:
         self.tgt_file = tgt_file
         self.contrast_loss = contrast_loss
         self.key_memory = key_memory
-        self.dim_weight = dim_weight
+        self.contrast_weight = contrast_weight
         self.threshold = threshold
         self.batch_size = batch_size
         self.eval_batch_size = eval_batch_size
@@ -105,7 +105,7 @@ class Train:
                 summary_write_figures(self.summary_writer, tag='Target predictions vs. true labels',
                                       global_step=self.iteration,
                                       model=self.model, images=tgt_inputs, labels=tgt_labels, domain=1)
-                summary_write_embeddings(self.summary_writer, tag='feature', global_step=self.iteration,
+                summary_write_embeddings(self.summary_writer, tag='features', global_step=self.iteration,
                                          model=self.model,
                                          src_train_loader=self.data_loader['src_embed'],
                                          tgt_train_loader=self.data_loader['tgt_embed'],
@@ -147,17 +147,19 @@ class Train:
         # TODO
         self.optimizer.zero_grad()
 
-        # source classification
+        # prepare source and target batches
         src_inputs, src_labels, _ = self.get_sample('src_train')
         tgt_inputs, _, tgt_indices = self.get_sample('tgt_train')
         src_inputs, src_labels, tgt_inputs = src_inputs.cuda(), src_labels.cuda(), tgt_inputs.cuda()
+
+        # source classification
         self.src_supervised_step(src_inputs, src_labels)
 
-        # local deep infomax
+        # class contrastive alignment
         self.contrastive_step(src_inputs, src_labels, tgt_inputs, tgt_indices)
 
         self.losses_dict['total_loss'] = \
-            self.losses_dict['src_classification_loss'] + self.dim_weight * self.losses_dict['dim_loss']
+            self.losses_dict['src_classification_loss'] + self.contrast_weight * self.losses_dict['contrast_loss']
         self.losses_dict['total_loss'].backward()
         self.optimizer.step()
 
@@ -180,41 +182,49 @@ class Train:
         src_train_accuracy = (src_predicted == src_labels).sum().item() / src_labels.size(0)
         self.src_train_accuracy_queue.put(src_train_accuracy)
 
-    def local_deep_infomax_step(self, src_inputs, src_labels, tgt_inputs, tgt_labels, memory_features, memory_labels):
-        labels = torch.cat((src_labels, tgt_labels), dim=0)
-        memory_features, memory_labels = memory_features.cuda(), memory_labels.cuda()
+    def contrastive_step(self, src_inputs, src_labels, tgt_inputs, tgt_indices):
+        # prepare memory keys and labels
+        memory_features_key, memory_labels = self.key_memory.get_queue()
+        memory_features_key, memory_labels = memory_features_key.cuda(), memory_labels.cuda()
 
         self.model.set_bn_domain(domain=0)
-        src_end_points_1 = self.model(src_inputs)
+        src_end_points = self.model(src_inputs)
         self.model.set_bn_domain(domain=1)
-        tgt_end_points_1 = self.model(tgt_inputs)
+        tgt_end_points = self.model(tgt_inputs)
 
-        r1 = torch.cat([src_end_points_1['r1'], tgt_end_points_1['r1']], dim=0)
+        batch_features = torch.cat([src_end_points['features'], tgt_end_points['features']], dim=0)
 
         with torch.no_grad():
             self.model_ema.set_bn_domain(domain=0)
-            src_end_points_2 = self.model_ema(src_inputs)
+            src_end_points_ema = self.model_ema(src_inputs)
             self.model_ema.set_bn_domain(domain=1)
-            tgt_end_points_2 = self.model_ema(tgt_inputs)
+            tgt_end_points_ema = self.model_ema(tgt_inputs)
 
-            local_feature = torch.cat(
-                [src_end_points_2[self.local_feature_name], tgt_end_points_2[self.local_feature_name]], dim=0)
-            if len(local_feature.size()) == 2:
-                local_feature = local_feature.unsqueeze(dim=2).unsqueeze(dim=3)
+        batch_features_key = torch.cat([src_end_points_ema['features'], tgt_end_points_ema['features']], dim=0)
 
-            all_local_features = torch.cat([local_feature, memory_features], dim=0)
-            all_labels = torch.cat([labels, memory_labels], dim=0).unsqueeze(dim=1)
+        tgt_labels = [self.tgt_predictions_list[index] if self.tgt_confidences_list[index] > self.threshold
+                      else -1 for index in tgt_indices.tolist()]
+        tgt_labels = torch.tensor(tgt_labels).cuda()
+        batch_labels = torch.cat((src_labels, tgt_labels), dim=0)
 
-            mask_mat = (all_labels == all_labels.transpose(0, 1)).float().cuda()  # TODO
-            mask_mat = mask_mat.narrow(dim=0, start=0, length=labels.size(0))
-            # mask_mat = torch.eye(labels.size(0)).cuda()
+        all_features_key = torch.cat([batch_features_key, memory_features_key], dim=0)
+        all_labels = torch.cat([batch_labels, memory_labels], dim=0).unsqueeze(dim=1)
 
-        loss_1tn, lgt_reg = self.contrast_loss(r1, all_local_features, mask_mat)
-        self.losses_dict['loss_1tn'] = loss_1tn
-        self.losses_dict['lgt_reg'] = lgt_reg
+        certain_labels = (all_labels != -1)
+        certain_matrix = ((certain_labels & certain_labels.transpose(0, 1)) |
+                          torch.eye(all_labels.size(0)).bool().cuda())
+        pos_matrix = (all_labels == all_labels.transpose(0, 1))  # TODO
+        pos_matrix = (pos_matrix & certain_matrix).float()
+        pos_matrix = pos_matrix.narrow(dim=0, start=0, length=batch_labels.size(0)).cuda()
 
-        dim_loss = loss_1tn + lgt_reg
-        self.losses_dict['dim_loss'] = dim_loss
+        query_to_key_loss, contrast_norm_loss = self.contrast_loss(batch_features, all_features_key, pos_matrix)
+        self.losses_dict['query_to_key_loss'] = query_to_key_loss
+        self.losses_dict['contrast_norm_loss'] = contrast_norm_loss
+
+        contrast_loss = query_to_key_loss + contrast_norm_loss
+        self.losses_dict['contrast_loss'] = contrast_loss
+
+        self.key_memory.store_keys(batch_features_key, batch_labels)
 
     def tgt_test(self):
         predictions_list = []
@@ -234,46 +244,6 @@ class Train:
                 correct += (end_points['predictions'] == labels).sum().item()
             self.accuracies_dict['tgt_test_accuracy'] = round(correct / len(self.data_loader['tgt_test'].dataset), 5)
         return predictions_list, confidences_list
-
-    def update_key_memory(self):
-        with torch.no_grad():
-            # src_inputs, src_labels = self.get_sample('src_queue')
-            src_inputs, src_labels, _ = self.get_sample('src_queue')
-            # tgt_inputs, _ = self.get_sample('tgt_queue')
-            tgt_inputs, _, tgt_indices = self.get_sample('tgt_queue')
-            tgt_labels = [self.tgt_predictions_list[index] if self.tgt_confidences_list[index] > self.threshold
-                          else -1 for index in tgt_indices.tolist()]
-            # src_size = src_inputs.size(0)
-            # tgt_size = tgt_inputs.size(0)
-            src_inputs, tgt_inputs, src_labels = src_inputs.cuda(), tgt_inputs.cuda(), src_labels.cuda()
-            # tgt_inputs = tgt_inputs.cuda()
-            # inputs = torch.cat((src_inputs, tgt_inputs), dim=0)
-            self.model_ema.set_bn_domain(domain=0)
-            src_end_points = self.model_ema(src_inputs)
-            self.model_ema.set_bn_domain(domain=1)
-            tgt_end_points = self.model_ema(tgt_inputs)
-
-            # end_points = self.model_ema(inputs)
-            # _, tgt_pseudo_labels = torch.split(end_points['predictions'], [src_size, tgt_size], dim=0)
-            # tgt_labels = [tgt_pseudo_labels[index] if end_points['confidences'][src_size + index] > self.threshold
-            #               else -1 for index in range(tgt_size)]
-            # tgt_pseudo_labels = tgt_end_points['predictions'].tolist()
-            # tgt_labels = [tgt_pseudo_labels[index] if tgt_end_points['confidences'][index] > self.threshold
-            #               else -1 for index in range(tgt_size)]
-            tgt_labels = torch.tensor(tgt_labels).cuda()
-            labels = torch.cat([src_labels, tgt_labels], dim=0)
-
-            # local_feature = end_points[self.local_feature_name]
-            local_feature = torch.cat(
-                [src_end_points[self.local_feature_name], tgt_end_points[self.local_feature_name]], dim=0)
-            # local_feature = tgt_end_points[self.local_feature_name]
-            # if len(end_points[self.local_feature_name].size()) == 2:
-            if len(local_feature.size()) == 2:
-                local_feature = local_feature.unsqueeze(dim=2).unsqueeze(dim=3)
-
-            # self.key_memory.store_keys(end_points[self.local_feature_name], labels)
-            self.key_memory.store_keys(local_feature, labels)
-            # self.key_memory.store_keys(local_feature, tgt_labels)
 
     def get_sample(self, data_name):
         try:

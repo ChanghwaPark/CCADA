@@ -5,18 +5,16 @@ from torch import nn
 
 
 class KeyMemory(nn.Module):
-    def __init__(self, queue_size, n_rkhs, n_dims):
+    def __init__(self, queue_size, feature_dim):
         super(KeyMemory, self).__init__()
         self.queue_size = queue_size
-        self.n_rkhs = n_rkhs
-        self.n_dims = n_dims
+        self.feature_dim = feature_dim
         self.index = 0
 
-        stdv = 1. / math.sqrt(self.n_rkhs * self.n_dims * self.n_dims / 3)
-        self.register_buffer(
-            'features', torch.rand(self.queue_size, self.n_rkhs, self.n_dims, self.n_dims).mul_(2 * stdv).add_(-stdv))
+        stdv = 1. / math.sqrt(self.feature_dim / 3)
+        self.register_buffer('features', torch.rand(self.queue_size, self.feature_dim).mul_(2 * stdv).add_(-stdv))
         self.register_buffer('labels', torch.tensor([-1] * self.queue_size))
-        print('Using queue shape: ({},{},{},{})'.format(self.queue_size, self.n_rkhs, self.n_dims, self.n_dims))
+        print('Using queue shape: ({},{})'.format(self.queue_size, self.feature_dim))
 
     def store_keys(self, batch_features, batch_labels):
         batch_size = batch_features.size(0)

@@ -11,7 +11,7 @@ from model.costs import LossMultiNCE
 from model.key_memory import KeyMemory
 from model.model import Model
 from train import Train
-from utils import configure, get_dataset_name, moment_update, get_n_dims
+from utils import configure, get_dataset_name, moment_update
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--config_file',
@@ -40,13 +40,17 @@ parser.add_argument('--iterations_per_epoch',
                     help='Number of iterations per epoch')
 parser.add_argument('--gpu',
                     type=str,
-                    default='0',
+                    default='2',
                     help='Selected gpu index')
-# parser.add_argument('--tclip',
-#                     type=float,
-#                     default=10.,
-#                     help='Soft clipping range for NCE scores')
-parser.add_argument('--dim_weight',
+parser.add_argument('--num_workers',
+                    type=int,
+                    default=8,
+                    help='Number of workers')
+parser.add_argument('--tclip',
+                    type=float,
+                    default=10.,
+                    help='Soft clipping range for NCE scores')
+parser.add_argument('--contrast_weight',
                     type=float,
                     default=1.,
                     help='Weight for self supervision using deep infomax')
@@ -62,10 +66,12 @@ parser.add_argument('--alpha',
                     type=float,
                     default=0.99,
                     help='momentum coefficient for model ema')
-parser.add_argument('--temperature',
-                    type=float,
-                    default=0.1,
-                    help='temperature coefficient for contrastive loss')
+
+
+# parser.add_argument('--temperature',
+#                     type=float,
+#                     default=0.1,
+#                     help='temperature coefficient for contrastive loss')
 
 
 def main():
@@ -80,10 +86,11 @@ def main():
     setup_list = [
         args.src,
         args.tgt,
-        f"dim_weight_{args.dim_weight}",
+        f"contrast_weight_{args.contrast_weight}",
         f"threshold_{args.threshold}",
         f"alpha_{args.alpha}",
-        f"temperature_{args.temperature}",
+        # f"temperature_{args.temperature}",
+        f"tclip_{args.tclip}",
         f"gpu_{args.gpu}"
     ]
     model_name = "_".join(setup_list)
@@ -112,8 +119,8 @@ def main():
     model = model.cuda()
     model_ema = model_ema.cuda()
 
-    # contrast_loss = LossMultiNCE(tclip=args.tclip).cuda()
-    contrast_loss = LossMultiNCE(temperature=0.1).cuda()
+    contrast_loss = LossMultiNCE(tclip=args.tclip).cuda()
+    # contrast_loss = LossMultiNCE(temperature=0.1).cuda()
     key_memory = KeyMemory(args.queue_size, dataset_config.bottleneck_dim).cuda()
 
     parameters = model.get_parameter_list()
@@ -126,7 +133,7 @@ def main():
 
     trainer = Train(model, model_ema, optimizer, lr_scheduler, group_ratios,
                     summary_writer, src_file, tgt_file, contrast_loss, key_memory,
-                    dim_weight=args.dim_weight,
+                    contrast_weight=args.contrast_weight,
                     threshold=args.threshold,
                     batch_size=args.batch_size,
                     eval_batch_size=args.eval_batch_size,

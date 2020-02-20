@@ -47,10 +47,10 @@ class Model(nn.Module):
     def forward(self, inputs):
         end_points = {}
         base_feature = self.base_network(inputs)
-        feature = self.bottleneck_layer(base_feature)
-        end_points['feature'] = feature
+        features = self.bottleneck_layer(base_feature)
+        end_points['features'] = features
 
-        logits = self.classifier_layer(feature)
+        logits = self.classifier_layer(features)
         end_points['logits'] = logits
 
         # outputs 'tensor'
