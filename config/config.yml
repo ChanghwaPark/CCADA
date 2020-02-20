@@ -1,0 +1,44 @@
+data:
+  dataset_root: '/home/omega/datasets'
+  dataset:
+    office:
+      network: resnet50 #ResNet50
+      is_center: False
+      #      network_kwargs:
+      num_classes: 31
+      bottleneck_dim: 1024
+    #        width: 1024 # 1024
+
+    office-home:
+      network: resnet50 #ResNet50
+      is_center: False  # True
+      #      network_kwargs:
+      num_classes: 65
+      bottleneck_dim: 2048
+    #        width: 2048  # 1024
+
+optimizer:
+  init_lr: 0.001 # 0.004
+  optim:
+    type: sgd
+    params:
+      lr: 0.001 # 0.004
+      momentum: 0.9
+      weight_decay: 0.0005
+      nesterov: True
+
+  lr_scheduler:
+    type: inv
+    gamma: 0.001
+    decay_rate: 0.75
+
+log:
+  log_dir: 'logs'
+  log_scalar_interval: 1
+  print_interval: 10
+  log_image_interval: 100
+  num_embedding_samples: 384
+
+train:
+  max_iteration: 100000
+
