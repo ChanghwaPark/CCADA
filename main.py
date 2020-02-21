@@ -44,7 +44,7 @@ parser.add_argument('--gpu',
                     help='Selected gpu index')
 parser.add_argument('--num_workers',
                     type=int,
-                    default=8,
+                    default=4,
                     help='Number of workers')
 parser.add_argument('--tclip',
                     type=float,
