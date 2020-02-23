@@ -66,6 +66,10 @@ parser.add_argument('--alpha',
                     type=float,
                     default=0.99,
                     help='momentum coefficient for model ema')
+parser.add_argument('--lr_decay',
+                    type=float,
+                    default=5.,
+                    help='learning rate decay coefficient')
 
 
 # parser.add_argument('--temperature',
