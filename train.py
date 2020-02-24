@@ -219,6 +219,8 @@ class Train:
     def tgt_test_and_update_matrix(self):
         src_all_features = torch.zeros(self.src_memory.get_size()).cuda()
         src_all_labels = torch.zeros(self.src_memory.get_size()[0]).long().cuda()
+        src_all_predictions = torch.zeros(self.src_memory.get_size()[0]).long().cuda()
+        src_all_confidences = []
         tgt_all_features = torch.zeros(self.tgt_memory.get_size()).cuda()
 
         self.model_ema.eval()
@@ -230,6 +232,8 @@ class Train:
                 src_end_points = self.model_ema(src_inputs)
                 src_all_features.index_copy_(0, src_indices, src_end_points['features'])
                 src_all_labels.index_copy_(0, src_indices, src_labels)
+                src_all_predictions.index_copy_(0, src_indices, src_end_points['predictions'])
+                src_all_confidences.extend(src_end_points['confidences'])
 
             self.model_ema.set_bn_domain(domain=1)
             correct = 0
@@ -241,48 +245,72 @@ class Train:
                 correct += (tgt_end_points['predictions'] == tgt_labels).sum().item()
             self.accuracies_dict['tgt_test_accuracy'] = round(correct / len(self.data_loader['tgt_test'].dataset), 5)
 
-            self.update_connected_components(src_all_features, src_all_labels, tgt_all_features)
+            self.update_connected_components(
+                src_all_features, src_all_labels, src_all_predictions, src_all_confidences, tgt_all_features)
 
-    def update_connected_components(self, src_all_features, src_all_labels, tgt_all_features):
+    def update_connected_components(self, src_all_features, src_all_labels, src_all_predictions, src_all_confidences,
+                                    tgt_all_features):
         """
         update clustered components for contrast loss
         Args:
             src_all_features: aggregated source features
             src_all_labels: aggregated source true labels
+            src_all_predictions: aggregated source predictions
             tgt_all_features: aggregated target features
         """
-        assert self.src_size == src_all_features.size(0) == src_all_labels.size(0)
+        assert self.src_size == src_all_features.size(0) == src_all_labels.size(0) == src_all_predictions.size(0)
         assert self.tgt_size == tgt_all_features.size(0)
         assert src_all_features.size(1) == tgt_all_features.size(1)
 
+        src_all_confidences = torch.tensor(src_all_confidences).cuda()
         final_component_labels = np.concatenate((src_all_labels.cpu().numpy(), np.array([-1] * self.tgt_size)))
-        src_all_labels = src_all_labels.unsqueeze(dim=1)
 
-        # self.src_sanity_check(src_all_features, src_all_labels)
-        # if not self.src_sanity:
-        #     self.clustered_components = torch.tensor(final_component_labels).cuda()
-        #     return
+        # src_right_indices = (src_all_predictions == src_all_labels).nonzero(as_tuple=True)[0]
+        src_right_indices = \
+        ((src_all_predictions == src_all_labels) & src_all_confidences.ge(0.)).nonzero(as_tuple=True)[0]
+        src_right_features = src_all_features.index_select(dim=0, index=src_right_indices)
+        src_right_labels = src_all_labels.index_select(dim=0, index=src_right_indices).unsqueeze(dim=1)
+        src_right_confidences = src_all_confidences.index_select(dim=0, index=src_right_indices)
+        print(src_right_labels.size(0))
+        if src_right_labels.unique().size(0) < self.num_classes:
+            self.clustered_components = torch.tensor(final_component_labels).cuda()
+            return
 
-        src_src_connections = (src_all_labels == src_all_labels.transpose(0, 1))
-        src_tgt_scores = torch.mm(src_all_features, tgt_all_features.transpose(0, 1)).float()
-        tgt_src_scores = src_tgt_scores.transpose(0, 1)
-        tgt_tgt_scores = torch.mm(tgt_all_features, tgt_all_features.transpose(0, 1)).float()
+        self.src_sanity_check(src_right_features, src_right_labels)
+        # print(self.src_sanity)
 
-        knn_samples = 1
+        # src_all_labels = src_all_labels.unsqueeze(dim=1)
+
+        # # src_src_connections = (src_all_labels == src_all_labels.transpose(0, 1))
+        src_src_connections = (src_right_labels == src_right_labels.transpose(0, 1))
+        # # src_tgt_scores = torch.mm(src_all_features, tgt_all_features.transpose(0, 1)).float()
+        # src_tgt_scores = torch.mm(src_right_features, tgt_all_features.transpose(0, 1)).float()
+        # tgt_src_scores = src_tgt_scores.transpose(0, 1)
+        # tgt_tgt_scores = torch.mm(tgt_all_features, tgt_all_features.transpose(0, 1)).float()
+        src_right_tgt_features = torch.cat([src_right_features, tgt_all_features], dim=0)
+        # all_scores = torch.mm(src_right_tgt_features, src_right_tgt_features.transpose(0, 1)).float()
+        all_scores = torch.mm(src_right_features, src_right_features.transpose(0, 1)).float()
+
+        knn_samples = 0
         continue_clustering = True
         while continue_clustering:
-            src_tgt_connections = self.get_connections(src_tgt_scores, knn_samples)
-            tgt_src_connections = self.get_connections(tgt_src_scores, knn_samples)
-            tgt_tgt_connections = self.get_connections(tgt_tgt_scores, knn_samples)
+            # src_tgt_connections = self.get_connections(src_tgt_scores, knn_samples)
+            # tgt_src_connections = self.get_connections(tgt_src_scores, knn_samples)
+            # tgt_tgt_connections = self.get_connections(tgt_tgt_scores, knn_samples)
 
-            all_connections = torch.cat([torch.cat([src_src_connections, src_tgt_connections], dim=1),
-                                         torch.cat([tgt_src_connections, tgt_tgt_connections], dim=1)], dim=0)
+            # all_connections = torch.cat([torch.cat([src_src_connections, src_tgt_connections], dim=1),
+            #                              torch.cat([tgt_src_connections, tgt_tgt_connections], dim=1)], dim=0)
+            all_connections = self.get_connections(all_scores, knn_samples)
             all_connections = all_connections.cpu().numpy()
 
             all_graph = csr_matrix(all_connections)
             n_components, component_labels = connected_components(csgraph=all_graph, directed=True, connection='weak')
+            print(n_components)
+            print(component_labels)
 
-            continue_clustering = self.check_components(n_components, component_labels, src_src_connections)
+            continue_clustering = self.check_components(n_components, component_labels, src_src_connections,
+                                                        src_right_confidences)
+            print(continue_clustering)
 
             if continue_clustering:
                 final_component_labels = component_labels
@@ -311,22 +339,44 @@ class Train:
         src_diff_max_scores = torch.max(src_diff_scores, dim=1)[0]
         self.src_sanity = torch.all(src_same_min_scores.eq(torch.max(src_same_min_scores, src_diff_max_scores))).item()
 
-    def check_components(self, n_components, component_labels, src_src_connections):
+    def check_components(self, n_components, component_labels, src_src_connections, src_right_confidences):
         if n_components < self.num_classes:
             return False
 
-        src_component_labels = component_labels[:self.src_size]
+        # src_component_labels = component_labels[:self.src_size]
+        src_component_labels = component_labels[:src_src_connections.size(0)]
         src_component_labels = np.expand_dims(src_component_labels, 1)
         src_component_connections = (src_component_labels == src_component_labels.transpose())
         src_src_connections = src_src_connections.cpu().numpy()
 
-        return np.array_equal(src_component_connections, src_src_connections)
+        print(src_src_connections.shape)
+        print(src_component_connections.shape)
+        false_connections = np.argwhere((src_src_connections >= src_component_connections) == False)
+        print(false_connections)
+        false_indices = np.unique(false_connections)
+        print(false_indices)
+        src_right_confidences = src_right_confidences.cpu().numpy()
+        false_confidences = src_right_confidences[false_indices]
+        print(false_confidences)
+        print(src_right_confidences.mean())
+        print(false_confidences.mean())
+        print(false_connections.shape)
+        print(false_connections)
+        # return np.array_equal(src_component_connections, src_src_connections)
+        return np.all(src_src_connections >= src_component_connections)
 
     @staticmethod
     def get_connections(scores, k):
-        indices = torch.topk(scores, k=k, dim=1)[1]
-        connections = torch.zeros_like(scores).bool().scatter_(dim=1, index=indices, src=torch.tensor(True)).cuda()
-        return connections
+        assert scores.size(0) == scores.size(1)
+        min_scores = torch.min(scores, dim=1, keepdim=True)[0]
+        masked_scores = torch.eye(scores.size(0)).cuda() * min_scores + (1. - torch.eye(scores.size(0)).cuda()) * scores
+        # indices = torch.topk(scores, k=k, dim=1)[1]
+        if k > 0:
+            indices = torch.topk(masked_scores, k=k, dim=1)[1]
+            connections = torch.zeros_like(scores).bool().scatter_(dim=1, index=indices, src=torch.tensor(True)).cuda()
+            return connections
+        else:
+            return torch.eye(scores.size(0)).bool().cuda()
 
     def get_sample(self, data_name):
         try:
