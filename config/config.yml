@@ -1,5 +1,5 @@
 data:
-  dataset_root: '/home/omega/datasets'
+  dataset_root: '/home/yoo/changhwa/datasets'
   dataset:
     office:
       network: resnet50 #ResNet50

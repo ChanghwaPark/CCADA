@@ -22,20 +22,21 @@ class LossMultiNCE(nn.Module):
         super(LossMultiNCE, self).__init__()
         self.tclip = tclip
 
-    def forward(self, r_src, r_trg, pos_matrix):
+    def forward(self, r_src, r_trg, pos_matrix, neg_matrix):
         """
                 Compute the NCE scores for predicting r_src->r_trg.
                 Input:
                   r_src    : (n_batch, n_rkhs)
                   r_trg    : (n_keys, n_rkhs)
-                  mask_pos : (n_batch, n_keys)
+                  pos_matrix : (n_batch, n_keys)
+                  neg_matrix : (n_batch, n_keys)
                 Output:
                   query_to_key_loss  : scalar
                   contrast_norm_loss : scalar
                 """
         r_trg = r_trg.transpose(1, 0)
         n_rkhs = r_src.size(1)
-        neg_matrix = 1. - pos_matrix
+        # neg_matrix = 1. - pos_matrix
 
         # compute src->trg raw scores for batch
         # (n_batch, n_keys)
@@ -55,7 +56,8 @@ class LossMultiNCE(nn.Module):
         pos_scores = (pos_matrix * raw_scores)
 
         # (n_batch, n_keys)
-        neg_scores = (neg_matrix * raw_scores) - (pos_matrix * self.tclip)
+        # neg_scores = (neg_matrix * raw_scores) - (pos_matrix * self.tclip)
+        neg_scores = (neg_matrix * raw_scores) - ((1. - neg_matrix) * self.tclip)
 
         '''
         for each set of positive examples P_i, compute the max over scores

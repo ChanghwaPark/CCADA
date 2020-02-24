@@ -1,5 +1,8 @@
+import numpy as np
 import torch
 import tqdm
+from scipy.sparse import csr_matrix
+from scipy.sparse.csgraph import connected_components
 from torch import nn
 
 from preprocess.data_provider import get_data_loader
@@ -8,9 +11,11 @@ from utils import summary_write_embeddings, summary_write_figures, AverageMeter,
 
 class Train:
     def __init__(self, model, model_ema, optimizer, lr_scheduler, group_ratios,
-                 summary_writer, src_file, tgt_file, contrast_loss, key_memory,
+                 summary_writer, src_file, tgt_file, contrast_loss, src_memory, tgt_memory,
                  contrast_weight=1.0,
-                 threshold=0.5,
+                 # knn_samples=3,
+                 num_classes=31,
+                 lr_decay=5,
                  batch_size=36,
                  eval_batch_size=36,
                  num_workers=4,
@@ -31,9 +36,12 @@ class Train:
         self.src_file = src_file
         self.tgt_file = tgt_file
         self.contrast_loss = contrast_loss
-        self.key_memory = key_memory
+        self.src_memory = src_memory
+        self.tgt_memory = tgt_memory
         self.contrast_weight = contrast_weight
-        self.threshold = threshold
+        # self.knn_samples = knn_samples
+        self.num_classes = num_classes
+        self.lr_decay = lr_decay
         self.batch_size = batch_size
         self.eval_batch_size = eval_batch_size
         self.num_workers = num_workers
@@ -62,11 +70,13 @@ class Train:
                                                          training=True, is_center=self.is_center),
                             'tgt_train': get_data_loader(self.tgt_file, self.train_data_loader_kwargs,
                                                          training=True, is_center=self.is_center),
+                            'src_test': get_data_loader(self.src_file, self.test_data_loader_kwargs, training=False),
                             'tgt_test': get_data_loader(self.tgt_file, self.test_data_loader_kwargs, training=False),
                             'src_embed': get_data_loader(self.src_file, self.train_data_loader_kwargs, training=False),
                             'tgt_embed': get_data_loader(self.tgt_file, self.train_data_loader_kwargs, training=False)}
         self.data_iterator = {'src_train': iter(self.data_loader['src_train']),
                               'tgt_train': iter(self.data_loader['tgt_train']),
+                              'src_test': iter(self.data_loader['src_test']),
                               'tgt_test': iter(self.data_loader['tgt_test'])}
         self.iteration = 0
         self.epoch = 0
@@ -76,51 +86,27 @@ class Train:
         self.accuracies_dict = {}
         self.src_train_accuracy_queue = AverageMeter(maxsize=100)
         self.class_criterion = nn.CrossEntropyLoss()
-        self.tgt_predictions_list = [-1] * len(self.data_loader['tgt_test'].dataset)
-        self.tgt_confidences_list = [0.] * len(self.data_loader['tgt_test'].dataset)
+        self.src_size = len(open(src_file).readlines())
+        self.tgt_size = len(open(tgt_file).readlines())
+        # self.pos_neg_matrix = torch.zeros((self.src_size + self.tgt_size), (self.src_size + self.tgt_size)).cuda()
+        # self.clustered_components = np.zeros((self.src_size + self.tgt_size), dtype=int)
+        self.clustered_components = torch.zeros((self.src_size + self.tgt_size)).cuda()
+
+        self.src_sanity = False
 
     def train(self):
         # start training
         self.total_progress_bar.write('Start training')
 
         while self.iteration < self.max_iter:
+            # evaluation and update clustered components update after each epoch
+            self.tgt_test_and_update_matrix()
+
+            # train an epoch
             self.train_epoch()
 
-            # evaluation after each epoch
-            self.tgt_predictions_list, self.tgt_confidences_list = self.tgt_test()
-
-            if self.epoch % self.log_scalar_interval == 0:
-                self.summary_writer.add_scalars('losses', self.losses_dict, global_step=self.iteration)
-                self.summary_writer.add_scalars('accuracies', self.accuracies_dict, global_step=self.iteration)
-                self.summary_writer.close()
-
-            if self.epoch % self.log_image_interval == 0:
-                src_inputs, src_labels, _ = next(iter(self.data_loader['src_train']))
-                tgt_inputs, tgt_labels, _ = next(iter(self.data_loader['tgt_train']))
-                src_inputs, src_labels, tgt_inputs, tgt_labels = \
-                    src_inputs.cuda(), src_labels.cuda(), tgt_inputs.cuda(), tgt_labels.cuda()
-                summary_write_figures(self.summary_writer, tag='Source predictions vs. true labels',
-                                      global_step=self.iteration,
-                                      model=self.model, images=src_inputs, labels=src_labels, domain=0)
-                summary_write_figures(self.summary_writer, tag='Target predictions vs. true labels',
-                                      global_step=self.iteration,
-                                      model=self.model, images=tgt_inputs, labels=tgt_labels, domain=1)
-                summary_write_embeddings(self.summary_writer, tag='features', global_step=self.iteration,
-                                         model=self.model,
-                                         src_train_loader=self.data_loader['src_embed'],
-                                         tgt_train_loader=self.data_loader['tgt_embed'],
-                                         num_samples=self.num_embedding_samples)
-                summary_write_embeddings(self.summary_writer, tag='logits', global_step=self.iteration,
-                                         model=self.model,
-                                         src_train_loader=self.data_loader['src_embed'],
-                                         tgt_train_loader=self.data_loader['tgt_embed'],
-                                         num_samples=self.num_embedding_samples)
-                self.model.train()
-
-            if self.epoch % self.print_interval == 0:
-                # show the latest eval_result
-                self.accuracies_dict['src_train_accuracy'] = self.src_train_accuracy_queue.get_average()
-                self.total_progress_bar.write('Iteration {:6d}: '.format(self.iteration) + str(self.accuracies_dict))
+            # log to summary_writer
+            self.log_summary_writer()
 
         self.total_progress_bar.write('Finish training')
 
@@ -143,20 +129,21 @@ class Train:
     def train_step(self):
 
         # update the learning rate of the optimizer
-        self.optimizer = self.lr_scheduler.next_optimizer(self.group_ratios, self.optimizer, self.iteration / 5)
-        # TODO
+        self.optimizer = \
+            self.lr_scheduler.next_optimizer(self.group_ratios, self.optimizer, self.iteration / self.lr_decay)
         self.optimizer.zero_grad()
 
         # prepare source and target batches
-        src_inputs, src_labels, _ = self.get_sample('src_train')
+        src_inputs, src_labels, src_indices = self.get_sample('src_train')
         tgt_inputs, _, tgt_indices = self.get_sample('tgt_train')
-        src_inputs, src_labels, tgt_inputs = src_inputs.cuda(), src_labels.cuda(), tgt_inputs.cuda()
+        src_inputs, src_labels, src_indices, tgt_inputs, tgt_indices \
+            = src_inputs.cuda(), src_labels.cuda(), src_indices.cuda(), tgt_inputs.cuda(), tgt_indices.cuda()
 
         # source classification
         self.src_supervised_step(src_inputs, src_labels)
 
         # class contrastive alignment
-        self.contrastive_step(src_inputs, src_labels, tgt_inputs, tgt_indices)
+        self.contrastive_step(src_inputs, src_indices, tgt_inputs, tgt_indices)
 
         self.losses_dict['total_loss'] = \
             self.losses_dict['src_classification_loss'] + self.contrast_weight * self.losses_dict['contrast_loss']
@@ -182,11 +169,7 @@ class Train:
         src_train_accuracy = (src_predicted == src_labels).sum().item() / src_labels.size(0)
         self.src_train_accuracy_queue.put(src_train_accuracy)
 
-    def contrastive_step(self, src_inputs, src_labels, tgt_inputs, tgt_indices):
-        # prepare memory keys and labels
-        memory_features_key, memory_labels = self.key_memory.get_queue()
-        memory_features_key, memory_labels = memory_features_key.cuda(), memory_labels.cuda()
-
+    def contrastive_step(self, src_inputs, src_indices, tgt_inputs, tgt_indices):
         self.model.set_bn_domain(domain=0)
         src_end_points = self.model(src_inputs)
         self.model.set_bn_domain(domain=1)
@@ -197,53 +180,153 @@ class Train:
         with torch.no_grad():
             self.model_ema.set_bn_domain(domain=0)
             src_end_points_ema = self.model_ema(src_inputs)
+            self.src_memory.store_keys(src_end_points_ema['features'], src_indices)
+
             self.model_ema.set_bn_domain(domain=1)
             tgt_end_points_ema = self.model_ema(tgt_inputs)
+            self.tgt_memory.store_keys(tgt_end_points_ema['features'], tgt_indices)
 
-        batch_features_key = torch.cat([src_end_points_ema['features'], tgt_end_points_ema['features']], dim=0)
+        src_features_key = self.src_memory.get_queue()
+        tgt_features_key = self.tgt_memory.get_queue()
+        src_features_key, tgt_features_key = src_features_key.cuda(), tgt_features_key.cuda()
+        all_features_key = torch.cat([src_features_key, tgt_features_key], dim=0)
 
-        tgt_labels = [self.tgt_predictions_list[index] if self.tgt_confidences_list[index] > self.threshold
-                      else -1 for index in tgt_indices.tolist()]
-        tgt_labels = torch.tensor(tgt_labels).cuda()
-        batch_labels = torch.cat((src_labels, tgt_labels), dim=0)
+        tgt_indices = tgt_indices + self.src_size
+        batch_indices = torch.cat([src_indices, tgt_indices], dim=0)
+        batch_components = self.clustered_components.gather(dim=0, index=batch_indices)
+        active_batch_components = batch_components.ge(0)
+        active_all_components = self.clustered_components.ge(0)
 
-        all_features_key = torch.cat([batch_features_key, memory_features_key], dim=0)
-        all_labels = torch.cat([batch_labels, memory_labels], dim=0).unsqueeze(dim=1)
+        # (batch_size, key_size)
+        active_mask_matrix = active_all_components & active_batch_components.unsqueeze(1)
 
-        certain_labels = (all_labels != -1)
-        certain_matrix = ((certain_labels & certain_labels.transpose(0, 1)) |
-                          torch.eye(all_labels.size(0)).bool().cuda())
-        pos_matrix = (all_labels == all_labels.transpose(0, 1))  # TODO
-        pos_matrix = (pos_matrix & certain_matrix).float()
-        pos_matrix = pos_matrix.narrow(dim=0, start=0, length=batch_labels.size(0)).cuda()
+        # (batch_size, key_size)
+        pos_matrix = (self.clustered_components == batch_components.unsqueeze(1))
+        pos_matrix = (pos_matrix & active_mask_matrix).float()
 
-        query_to_key_loss, contrast_norm_loss = self.contrast_loss(batch_features, all_features_key, pos_matrix)
+        # (batch_size, key_size)
+        neg_matrix = (self.clustered_components != batch_components.unsqueeze(1))
+        neg_matrix = (neg_matrix & active_mask_matrix).float()
+
+        query_to_key_loss, contrast_norm_loss = \
+            self.contrast_loss(batch_features, all_features_key, pos_matrix, neg_matrix)
         self.losses_dict['query_to_key_loss'] = query_to_key_loss
         self.losses_dict['contrast_norm_loss'] = contrast_norm_loss
 
         contrast_loss = query_to_key_loss + contrast_norm_loss
         self.losses_dict['contrast_loss'] = contrast_loss
 
-        self.key_memory.store_keys(batch_features_key, batch_labels)
+    def tgt_test_and_update_matrix(self):
+        src_all_features = torch.zeros(self.src_memory.get_size()).cuda()
+        src_all_labels = torch.zeros(self.src_memory.get_size()[0]).long().cuda()
+        tgt_all_features = torch.zeros(self.tgt_memory.get_size()).cuda()
 
-    def tgt_test(self):
-        predictions_list = []
-        confidences_list = []
-        self.model_ema.set_bn_domain(domain=1)
         self.model_ema.eval()
         with torch.no_grad():
+            self.model_ema.set_bn_domain(domain=0)
+            for (src_inputs, src_labels, src_indices) in tqdm.tqdm(
+                    self.data_loader['src_test'], desc='Source update', ncols=120, leave=False, ascii=True):
+                src_inputs, src_labels, src_indices = src_inputs.cuda(), src_labels.cuda(), src_indices.cuda()
+                src_end_points = self.model_ema(src_inputs)
+                src_all_features.index_copy_(0, src_indices, src_end_points['features'])
+                src_all_labels.index_copy_(0, src_indices, src_labels)
+
+            self.model_ema.set_bn_domain(domain=1)
             correct = 0
-            for (inputs, labels, _) in tqdm.tqdm(self.data_loader['tgt_test'],
-                                                 desc='Evaluation', ncols=120, leave=False, ascii=True):
-                inputs, labels = inputs.cuda(), labels.cuda()
-                end_points = self.model_ema(inputs)
-
-                predictions_list.extend(end_points['predictions'].tolist())
-                confidences_list.extend(end_points['confidences'])
-
-                correct += (end_points['predictions'] == labels).sum().item()
+            for (tgt_inputs, tgt_labels, tgt_indices) in tqdm.tqdm(
+                    self.data_loader['tgt_test'], desc='Evaluation', ncols=120, leave=False, ascii=True):
+                tgt_inputs, tgt_labels, tgt_indices = tgt_inputs.cuda(), tgt_labels.cuda(), tgt_indices.cuda()
+                tgt_end_points = self.model_ema(tgt_inputs)
+                tgt_all_features.index_copy_(0, tgt_indices, tgt_end_points['features'])
+                correct += (tgt_end_points['predictions'] == tgt_labels).sum().item()
             self.accuracies_dict['tgt_test_accuracy'] = round(correct / len(self.data_loader['tgt_test'].dataset), 5)
-        return predictions_list, confidences_list
+
+            self.update_connected_components(src_all_features, src_all_labels, tgt_all_features)
+
+    def update_connected_components(self, src_all_features, src_all_labels, tgt_all_features):
+        """
+        update clustered components for contrast loss
+        Args:
+            src_all_features: aggregated source features
+            src_all_labels: aggregated source true labels
+            tgt_all_features: aggregated target features
+        """
+        assert self.src_size == src_all_features.size(0) == src_all_labels.size(0)
+        assert self.tgt_size == tgt_all_features.size(0)
+        assert src_all_features.size(1) == tgt_all_features.size(1)
+
+        final_component_labels = np.concatenate((src_all_labels.cpu().numpy(), np.array([-1] * self.tgt_size)))
+        src_all_labels = src_all_labels.unsqueeze(dim=1)
+
+        # self.src_sanity_check(src_all_features, src_all_labels)
+        # if not self.src_sanity:
+        #     self.clustered_components = torch.tensor(final_component_labels).cuda()
+        #     return
+
+        src_src_connections = (src_all_labels == src_all_labels.transpose(0, 1))
+        src_tgt_scores = torch.mm(src_all_features, tgt_all_features.transpose(0, 1)).float()
+        tgt_src_scores = src_tgt_scores.transpose(0, 1)
+        tgt_tgt_scores = torch.mm(tgt_all_features, tgt_all_features.transpose(0, 1)).float()
+
+        knn_samples = 1
+        continue_clustering = True
+        while continue_clustering:
+            src_tgt_connections = self.get_connections(src_tgt_scores, knn_samples)
+            tgt_src_connections = self.get_connections(tgt_src_scores, knn_samples)
+            tgt_tgt_connections = self.get_connections(tgt_tgt_scores, knn_samples)
+
+            all_connections = torch.cat([torch.cat([src_src_connections, src_tgt_connections], dim=1),
+                                         torch.cat([tgt_src_connections, tgt_tgt_connections], dim=1)], dim=0)
+            all_connections = all_connections.cpu().numpy()
+
+            all_graph = csr_matrix(all_connections)
+            n_components, component_labels = connected_components(csgraph=all_graph, directed=True, connection='weak')
+
+            continue_clustering = self.check_components(n_components, component_labels, src_src_connections)
+
+            if continue_clustering:
+                final_component_labels = component_labels
+                knn_samples += 1
+
+        self.clustered_components = torch.tensor(final_component_labels).cuda()
+
+    def src_sanity_check(self, src_all_features, src_all_labels):
+        """
+        check if source features are clustered and aligned with source true labels
+        Args:
+            src_all_features: aggregated source features
+            src_all_labels: aggregated source true labels
+        """
+        assert src_all_features.size(0) == src_all_labels.size(0)
+
+        raw_scores = torch.mm(src_all_features, src_all_features.transpose(0, 1)).float()
+        max_score = torch.max(raw_scores)
+        min_score = torch.min(raw_scores)
+
+        src_same_matrix = (src_all_labels == src_all_labels.transpose(1, 0))
+        src_diff_matrix = ~src_same_matrix
+        src_same_scores = raw_scores * src_same_matrix + max_score * src_diff_matrix
+        src_diff_scores = raw_scores * src_diff_matrix + min_score * src_same_matrix
+        src_same_min_scores = torch.min(src_same_scores, dim=1)[0]
+        src_diff_max_scores = torch.max(src_diff_scores, dim=1)[0]
+        self.src_sanity = torch.all(src_same_min_scores.eq(torch.max(src_same_min_scores, src_diff_max_scores))).item()
+
+    def check_components(self, n_components, component_labels, src_src_connections):
+        if n_components < self.num_classes:
+            return False
+
+        src_component_labels = component_labels[:self.src_size]
+        src_component_labels = np.expand_dims(src_component_labels, 1)
+        src_component_connections = (src_component_labels == src_component_labels.transpose())
+        src_src_connections = src_src_connections.cpu().numpy()
+
+        return np.array_equal(src_component_connections, src_src_connections)
+
+    @staticmethod
+    def get_connections(scores, k):
+        indices = torch.topk(scores, k=k, dim=1)[1]
+        connections = torch.zeros_like(scores).bool().scatter_(dim=1, index=indices, src=torch.tensor(True)).cuda()
+        return connections
 
     def get_sample(self, data_name):
         try:
@@ -255,3 +338,37 @@ class Train:
             assert self.data_loader[data_name] is None
             return None
         return sample
+
+    def log_summary_writer(self):
+        if self.epoch % self.log_scalar_interval == 0:
+            self.summary_writer.add_scalars('losses', self.losses_dict, global_step=self.iteration)
+            self.summary_writer.add_scalars('accuracies', self.accuracies_dict, global_step=self.iteration)
+            self.summary_writer.close()
+
+        if self.epoch % self.log_image_interval == 0:
+            src_inputs, src_labels, _ = next(iter(self.data_loader['src_train']))
+            tgt_inputs, tgt_labels, _ = next(iter(self.data_loader['tgt_train']))
+            src_inputs, src_labels, tgt_inputs, tgt_labels = \
+                src_inputs.cuda(), src_labels.cuda(), tgt_inputs.cuda(), tgt_labels.cuda()
+            summary_write_figures(self.summary_writer, tag='Source predictions vs. true labels',
+                                  global_step=self.iteration,
+                                  model=self.model, images=src_inputs, labels=src_labels, domain=0)
+            summary_write_figures(self.summary_writer, tag='Target predictions vs. true labels',
+                                  global_step=self.iteration,
+                                  model=self.model, images=tgt_inputs, labels=tgt_labels, domain=1)
+            summary_write_embeddings(self.summary_writer, tag='features', global_step=self.iteration,
+                                     model=self.model,
+                                     src_train_loader=self.data_loader['src_embed'],
+                                     tgt_train_loader=self.data_loader['tgt_embed'],
+                                     num_samples=self.num_embedding_samples)
+            summary_write_embeddings(self.summary_writer, tag='logits', global_step=self.iteration,
+                                     model=self.model,
+                                     src_train_loader=self.data_loader['src_embed'],
+                                     tgt_train_loader=self.data_loader['tgt_embed'],
+                                     num_samples=self.num_embedding_samples)
+            self.model.train()
+
+        if self.epoch % self.print_interval == 0:
+            # show the latest eval_result
+            self.accuracies_dict['src_train_accuracy'] = self.src_train_accuracy_queue.get_average()
+            self.total_progress_bar.write('Iteration {:6d}: '.format(self.iteration) + str(self.accuracies_dict))
