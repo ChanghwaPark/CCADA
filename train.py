@@ -1,19 +1,26 @@
 import numpy as np
 import torch
 import tqdm
-from scipy.sparse import csr_matrix
-from scipy.sparse.csgraph import connected_components
+from scipy import sparse
+from scipy.sparse import linalg
 from torch import nn
+from torch.nn import functional as F
 
 from preprocess.data_provider import get_data_loader
 from utils import summary_write_embeddings, summary_write_figures, AverageMeter, moment_update
+
+NPY_INFINITY = np.inf
+SMOOTH_K_TOLERANCE = 1e-5
+MIN_K_DIST_SCALE = 1e-3
 
 
 class Train:
     def __init__(self, model, model_ema, optimizer, lr_scheduler, group_ratios,
                  summary_writer, src_file, tgt_file, contrast_loss, src_memory, tgt_memory,
                  contrast_weight=1.0,
-                 # knn_samples=3,
+                 knn_samples=10,
+                 beta=0.99,
+                 threshold=0.7,
                  num_classes=31,
                  lr_decay=5,
                  batch_size=36,
@@ -39,7 +46,9 @@ class Train:
         self.src_memory = src_memory
         self.tgt_memory = tgt_memory
         self.contrast_weight = contrast_weight
-        # self.knn_samples = knn_samples
+        self.knn_samples = knn_samples
+        self.beta = beta
+        self.threshold = threshold
         self.num_classes = num_classes
         self.lr_decay = lr_decay
         self.batch_size = batch_size
@@ -220,7 +229,6 @@ class Train:
         src_all_features = torch.zeros(self.src_memory.get_size()).cuda()
         src_all_labels = torch.zeros(self.src_memory.get_size()[0]).long().cuda()
         src_all_predictions = torch.zeros(self.src_memory.get_size()[0]).long().cuda()
-        src_all_confidences = []
         tgt_all_features = torch.zeros(self.tgt_memory.get_size()).cuda()
 
         self.model_ema.eval()
@@ -233,7 +241,6 @@ class Train:
                 src_all_features.index_copy_(0, src_indices, src_end_points['features'])
                 src_all_labels.index_copy_(0, src_indices, src_labels)
                 src_all_predictions.index_copy_(0, src_indices, src_end_points['predictions'])
-                src_all_confidences.extend(src_end_points['confidences'])
 
             self.model_ema.set_bn_domain(domain=1)
             correct = 0
@@ -245,138 +252,146 @@ class Train:
                 correct += (tgt_end_points['predictions'] == tgt_labels).sum().item()
             self.accuracies_dict['tgt_test_accuracy'] = round(correct / len(self.data_loader['tgt_test'].dataset), 5)
 
-            self.update_connected_components(
-                src_all_features, src_all_labels, src_all_predictions, src_all_confidences, tgt_all_features)
+            self.update_connected_components(src_all_features, src_all_labels, src_all_predictions, tgt_all_features)
 
-    def update_connected_components(self, src_all_features, src_all_labels, src_all_predictions, src_all_confidences,
-                                    tgt_all_features):
+    def update_connected_components(self, src_all_features, src_all_labels, src_all_predictions, tgt_all_features):
         """
         update clustered components for contrast loss
         Args:
-            src_all_features: aggregated source features
-            src_all_labels: aggregated source true labels
-            src_all_predictions: aggregated source predictions
-            tgt_all_features: aggregated target features
+            src_all_features: (self.src_size, n_rkhs) aggregated source features
+            src_all_labels: (self.src_size) aggregated source true labels
+            src_all_predictions: (self.src_size) aggregated source predictions
+            tgt_all_features: (self.tgt_size, n_rkhs) aggregated target features
         """
-        assert self.src_size == src_all_features.size(0) == src_all_labels.size(0) == src_all_predictions.size(0)
+        assert self.src_size == src_all_features.size(0) == src_all_labels.size(0)
         assert self.tgt_size == tgt_all_features.size(0)
         assert src_all_features.size(1) == tgt_all_features.size(1)
 
-        src_all_confidences = torch.tensor(src_all_confidences).cuda()
-        final_component_labels = np.concatenate((src_all_labels.cpu().numpy(), np.array([-1] * self.tgt_size)))
+        src_right_indices = (src_all_predictions == src_all_labels).nonzero(as_tuple=True)[0]
+        src_right_labels = src_all_labels.index_select(dim=0, index=src_right_indices)
 
-        # src_right_indices = (src_all_predictions == src_all_labels).nonzero(as_tuple=True)[0]
-        src_right_indices = \
-        ((src_all_predictions == src_all_labels) & src_all_confidences.ge(0.)).nonzero(as_tuple=True)[0]
-        src_right_features = src_all_features.index_select(dim=0, index=src_right_indices)
-        src_right_labels = src_all_labels.index_select(dim=0, index=src_right_indices).unsqueeze(dim=1)
-        src_right_confidences = src_all_confidences.index_select(dim=0, index=src_right_indices)
-        print(src_right_labels.size(0))
         if src_right_labels.unique().size(0) < self.num_classes:
-            self.clustered_components = torch.tensor(final_component_labels).cuda()
+            self.clustered_components = torch.cat([src_all_labels, torch.tensor([-1] * self.tgt_size).cuda()], dim=0)
             return
 
-        self.src_sanity_check(src_right_features, src_right_labels)
-        # print(self.src_sanity)
+        # (self.src_size + self.tgt_size, n_rkhs)
+        all_features = torch.cat([src_all_features, tgt_all_features], dim=0)
+        all_scores = torch.mm(all_features, all_features.transpose(0, 1)).float()
+        transition_matrix = self.calculate_transition_matrix(all_scores)
+        sp_transition_matrix = sparse.csr_matrix(transition_matrix.cpu().numpy())
+        spreading_matrix = sparse.eye(self.src_size + self.tgt_size) - self.beta * sp_transition_matrix
 
-        # src_all_labels = src_all_labels.unsqueeze(dim=1)
+        src_all_labels_onehot = torch.zeros(self.src_size, self.num_classes).cuda()
+        src_all_labels_onehot.scatter_(1, src_all_labels.unsqueeze(1), 1)
+        all_labels_onehot = torch.cat([src_all_labels_onehot, torch.zeros(self.tgt_size, self.num_classes).cuda()], 0)
+        np_all_labels_onehot = all_labels_onehot.cpu().numpy()
+        lp_results = np.zeros((self.src_size + self.tgt_size, self.num_classes))
+        for i in range(self.num_classes):
+            y = np_all_labels_onehot[:, i]
+            f = sparse.linalg.cg(spreading_matrix, y, tol=1e-6, maxiter=20)[0]
+            lp_results[:, i] = f
 
-        # # src_src_connections = (src_all_labels == src_all_labels.transpose(0, 1))
-        src_src_connections = (src_right_labels == src_right_labels.transpose(0, 1))
-        # # src_tgt_scores = torch.mm(src_all_features, tgt_all_features.transpose(0, 1)).float()
-        # src_tgt_scores = torch.mm(src_right_features, tgt_all_features.transpose(0, 1)).float()
-        # tgt_src_scores = src_tgt_scores.transpose(0, 1)
-        # tgt_tgt_scores = torch.mm(tgt_all_features, tgt_all_features.transpose(0, 1)).float()
-        src_right_tgt_features = torch.cat([src_right_features, tgt_all_features], dim=0)
-        # all_scores = torch.mm(src_right_tgt_features, src_right_tgt_features.transpose(0, 1)).float()
-        all_scores = torch.mm(src_right_features, src_right_features.transpose(0, 1)).float()
+        lp_results[lp_results < 0] = 0
+        tgt_lp_results = lp_results[self.src_size:, :]
+        normalized_tgt_lp_results = F.normalize(torch.tensor(tgt_lp_results).cuda(), 1)
+        tgt_lp_result_labels = torch.argmax(normalized_tgt_lp_results, dim=1)
+        tgt_lp_result_confidences = torch.max(normalized_tgt_lp_results, 1)[0]
+        tgt_lp_final_labels = torch.where(
+            tgt_lp_result_confidences > self.threshold, tgt_lp_result_labels, torch.tensor([-1] * self.tgt_size).cuda())
+        print(tgt_lp_final_labels)
+        self.clustered_components = torch.cat([src_all_labels, tgt_lp_final_labels], dim=0)
 
-        knn_samples = 0
-        continue_clustering = True
-        while continue_clustering:
-            # src_tgt_connections = self.get_connections(src_tgt_scores, knn_samples)
-            # tgt_src_connections = self.get_connections(tgt_src_scores, knn_samples)
-            # tgt_tgt_connections = self.get_connections(tgt_tgt_scores, knn_samples)
-
-            # all_connections = torch.cat([torch.cat([src_src_connections, src_tgt_connections], dim=1),
-            #                              torch.cat([tgt_src_connections, tgt_tgt_connections], dim=1)], dim=0)
-            all_connections = self.get_connections(all_scores, knn_samples)
-            all_connections = all_connections.cpu().numpy()
-
-            all_graph = csr_matrix(all_connections)
-            n_components, component_labels = connected_components(csgraph=all_graph, directed=True, connection='weak')
-            print(n_components)
-            print(component_labels)
-
-            continue_clustering = self.check_components(n_components, component_labels, src_src_connections,
-                                                        src_right_confidences)
-            print(continue_clustering)
-
-            if continue_clustering:
-                final_component_labels = component_labels
-                knn_samples += 1
-
-        self.clustered_components = torch.tensor(final_component_labels).cuda()
-
-    def src_sanity_check(self, src_all_features, src_all_labels):
-        """
-        check if source features are clustered and aligned with source true labels
-        Args:
-            src_all_features: aggregated source features
-            src_all_labels: aggregated source true labels
-        """
-        assert src_all_features.size(0) == src_all_labels.size(0)
-
-        raw_scores = torch.mm(src_all_features, src_all_features.transpose(0, 1)).float()
-        max_score = torch.max(raw_scores)
-        min_score = torch.min(raw_scores)
-
-        src_same_matrix = (src_all_labels == src_all_labels.transpose(1, 0))
-        src_diff_matrix = ~src_same_matrix
-        src_same_scores = raw_scores * src_same_matrix + max_score * src_diff_matrix
-        src_diff_scores = raw_scores * src_diff_matrix + min_score * src_same_matrix
-        src_same_min_scores = torch.min(src_same_scores, dim=1)[0]
-        src_diff_max_scores = torch.max(src_diff_scores, dim=1)[0]
-        self.src_sanity = torch.all(src_same_min_scores.eq(torch.max(src_same_min_scores, src_diff_max_scores))).item()
-
-    def check_components(self, n_components, component_labels, src_src_connections, src_right_confidences):
-        if n_components < self.num_classes:
-            return False
-
-        # src_component_labels = component_labels[:self.src_size]
-        src_component_labels = component_labels[:src_src_connections.size(0)]
-        src_component_labels = np.expand_dims(src_component_labels, 1)
-        src_component_connections = (src_component_labels == src_component_labels.transpose())
-        src_src_connections = src_src_connections.cpu().numpy()
-
-        print(src_src_connections.shape)
-        print(src_component_connections.shape)
-        false_connections = np.argwhere((src_src_connections >= src_component_connections) == False)
-        print(false_connections)
-        false_indices = np.unique(false_connections)
-        print(false_indices)
-        src_right_confidences = src_right_confidences.cpu().numpy()
-        false_confidences = src_right_confidences[false_indices]
-        print(false_confidences)
-        print(src_right_confidences.mean())
-        print(false_confidences.mean())
-        print(false_connections.shape)
-        print(false_connections)
-        # return np.array_equal(src_component_connections, src_src_connections)
-        return np.all(src_src_connections >= src_component_connections)
-
-    @staticmethod
-    def get_connections(scores, k):
+    def calculate_transition_matrix(self, scores):
         assert scores.size(0) == scores.size(1)
-        min_scores = torch.min(scores, dim=1, keepdim=True)[0]
-        masked_scores = torch.eye(scores.size(0)).cuda() * min_scores + (1. - torch.eye(scores.size(0)).cuda()) * scores
-        # indices = torch.topk(scores, k=k, dim=1)[1]
-        if k > 0:
-            indices = torch.topk(masked_scores, k=k, dim=1)[1]
-            connections = torch.zeros_like(scores).bool().scatter_(dim=1, index=indices, src=torch.tensor(True)).cuda()
-            return connections
-        else:
-            return torch.eye(scores.size(0)).bool().cuda()
+
+        # get masked scores
+        num_data = scores.size(0)
+        eye_matrix = torch.eye(num_data).cuda()
+        min_scores = torch.min(scores, dim=1, keepdim=True)[0] * eye_matrix
+        masked_scores = torch.where(eye_matrix > 0, min_scores, scores)
+
+        # get knn_samples nearest neighbor for each data
+        knn_scores, knn_indices = torch.topk(masked_scores, k=self.knn_samples, dim=1)
+        normalized_knn_distances = self.calculate_knn_distances(knn_scores)
+        weighted_adjacency_matrix = torch.zeros_like(masked_scores).scatter_(
+            dim=1, index=knn_indices, src=normalized_knn_distances)
+        symmetric_matrix = \
+            weighted_adjacency_matrix + weighted_adjacency_matrix.transpose(0, 1) \
+            - weighted_adjacency_matrix * weighted_adjacency_matrix.transpose(0, 1)
+        normalization_matrix = torch.eye(num_data).cuda() * torch.div(1., torch.sqrt(torch.sum(symmetric_matrix, 1)))
+        transition_matrix = torch.mm(torch.mm(normalization_matrix, symmetric_matrix), normalization_matrix)
+
+        return transition_matrix
+
+    def calculate_knn_distances(self, knn_scores, n_iter=64):
+        assert knn_scores.size(0) == (self.src_size + self.tgt_size)
+        assert knn_scores.size(1) == self.knn_samples
+
+        rho = torch.max(knn_scores, dim=1, keepdim=True)[0]
+        distances = torch.sub(rho, knn_scores)
+        np_distances = distances.cpu().numpy()
+
+        target = np.log2(self.knn_samples)
+        sigma_values = np.zeros(np_distances.shape[0], dtype=np.float32)
+
+        for i in range(np_distances.shape[0]):
+            lo = 0.0
+            hi = NPY_INFINITY
+            mid = 1.0
+
+            for n in range(n_iter):
+                psum = 0.0
+                for j in range(np_distances.shape[1]):
+                    d = np_distances[i, j]
+                    if d > 0:
+                        psum += np.exp(-(d / mid))
+                    else:
+                        psum += 1.0
+
+                if np.fabs(psum - target) < SMOOTH_K_TOLERANCE:
+                    break
+
+                if psum > target:
+                    hi = mid
+                    mid = (lo + hi) / 2.0
+                else:
+                    lo = mid
+                    if hi == NPY_INFINITY:
+                        mid *= 2
+                    else:
+                        mid = (lo + hi) / 2.0
+
+            sigma_values[i] = mid
+
+            mean_ith_distances = np.mean(np_distances[i])
+            if sigma_values[i] < MIN_K_DIST_SCALE * mean_ith_distances:
+                sigma_values[i] = MIN_K_DIST_SCALE * mean_ith_distances
+
+        sigma_values = torch.tensor(sigma_values).unsqueeze(1).cuda()
+        normalized_knn_distances = torch.exp(-torch.div(distances, sigma_values))
+
+        return normalized_knn_distances
+
+    # def src_sanity_check(self, src_all_features, src_all_labels):
+    #     """
+    #     check if source features are clustered and aligned with source true labels
+    #     Args:
+    #         src_all_features: aggregated source features
+    #         src_all_labels: aggregated source true labels
+    #     """
+    #     assert src_all_features.size(0) == src_all_labels.size(0)
+    #
+    #     raw_scores = torch.mm(src_all_features, src_all_features.transpose(0, 1)).float()
+    #     max_score = torch.max(raw_scores)
+    #     min_score = torch.min(raw_scores)
+    #
+    #     src_same_matrix = (src_all_labels == src_all_labels.transpose(1, 0))
+    #     src_diff_matrix = ~src_same_matrix
+    #     src_same_scores = raw_scores * src_same_matrix + max_score * src_diff_matrix
+    #     src_diff_scores = raw_scores * src_diff_matrix + min_score * src_same_matrix
+    #     src_same_min_scores = torch.min(src_same_scores, dim=1)[0]
+    #     src_diff_max_scores = torch.max(src_diff_scores, dim=1)[0]
+    #     self.src_sanity = torch.all(src_same_min_scores.eq(torch.max(src_same_min_scores, src_diff_max_scores))).item()
 
     def get_sample(self, data_name):
         try:
