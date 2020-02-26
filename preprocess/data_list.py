@@ -23,13 +23,13 @@ def pil_loader(path):
             return img.convert('RGB')
 
 
-def accimage_loader(path):
-    import accimage
-    try:
-        return accimage.Image(path)
-    except IOError:
-        # Potentially a decoding problem, fall back to PIL.Image
-        return pil_loader(path)
+# def accimage_loader(path):
+#     import accimage
+#     try:
+#         return accimage.Image(path)
+#     except IOError:
+#         # Potentially a decoding problem, fall back to PIL.Image
+#         return pil_loader(path)
 
 
 def default_loader(path):
@@ -43,7 +43,7 @@ def default_loader(path):
 class ImageList(Dataset):
     """
     Args:
-        image_list (list): List of (image path, class_index) tuples
+        summary_file (file_path): Path to images summary file
         transform (callable, optional): A function/transform that  takes in an PIL image
             and returns a transformed version. E.g, ``transforms.RandomCrop``
         target_transform (callable, optional): A function/transform that takes in the
@@ -51,8 +51,11 @@ class ImageList(Dataset):
         loader (callable, optional): A function to load an image given its path.
     """
 
-    def __init__(self, image_list, labels=None, transform=None, target_transform=None,
+    # def __init__(self, image_list, labels=None, transform=None, target_transform=None,
+    #              loader=default_loader):
+    def __init__(self, summary_file, labels=None, transform=None, target_transform=None,
                  loader=default_loader):
+        image_list = open(summary_file).readlines()
         images = make_dataset(image_list, labels)
         assert len(images) > 0
         self.images = images
@@ -79,3 +82,30 @@ class ImageList(Dataset):
 
     def __len__(self):
         return len(self.images)
+
+
+class CustomImageList(Dataset):
+    def __init__(self, summary_file, confident_mask, labels=None, transform=None, target_transform=None,
+                 loader=default_loader):
+        image_list = open(summary_file).readlines()
+        images = make_dataset(image_list, labels)
+        assert len(images) > 0
+        confident_images = [(image, index) for index, image in enumerate(images) if confident_mask[index] is True]
+        # self.images = images
+        self.confident_images = confident_images
+        self.transform = transform
+        self.target_transform = target_transform
+        self.loader = loader
+
+    def __getitem__(self, index):
+        (path, target), ori_index = self.confident_images[index]
+        img = self.loader(path)
+        if self.transform is not None:
+            img = self.transform(img)
+        if self.target_transform is not None:
+            target = self.target_transform(target)
+
+        return img, target, ori_index
+
+    def __len__(self):
+        return len(self.confident_images)

@@ -1,7 +1,7 @@
 from torch.utils.data import DataLoader
 from torchvision import transforms
 
-from .data_list import ImageList
+from .data_list import ImageList, CustomImageList
 
 _RESIZE_SIZE = 256
 _CROP_SIZE = 224
@@ -9,9 +9,14 @@ _NORMALIZE = transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224,
 
 
 def get_data_loader(summary_file, data_loader_kwargs, training=True, is_center=False):
-    images_file_path_list = open(summary_file).readlines()
     transformer = get_transformer(training=training, is_center=is_center)
-    dataset = ImageList(images_file_path_list, transform=transformer)
+    dataset = ImageList(summary_file, transform=transformer)
+    return DataLoader(dataset, **data_loader_kwargs)
+
+
+def get_certain_data_loader(summary_file, data_loader_kwargs, confident_mask, is_center=False):
+    transformer = get_transformer(training=True, is_center=is_center)
+    dataset = CustomImageList(summary_file, confident_mask, transform=transformer)
     return DataLoader(dataset, **data_loader_kwargs)
 
 

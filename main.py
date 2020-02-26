@@ -20,11 +20,11 @@ parser.add_argument('--config_file',
                     help='Dataset configuration parameters')
 parser.add_argument('--src',
                     type=str,
-                    default='amazon',
+                    default='dslr',
                     help='Source dataset name')
 parser.add_argument('--tgt',
                     type=str,
-                    default='dslr',
+                    default='amazon',
                     help='Target dataset name')
 parser.add_argument('--batch_size',
                     type=int,
@@ -44,7 +44,7 @@ parser.add_argument('--gpu',
                     help='Selected gpu index')
 parser.add_argument('--num_workers',
                     type=int,
-                    default=8,
+                    default=4,
                     help='Number of workers')
 parser.add_argument('--tclip',
                     type=float,
@@ -58,22 +58,10 @@ parser.add_argument('--threshold',
                     type=float,
                     default=0.7,
                     help='Confidence threshold for pseudo labeling target samples')
-parser.add_argument('--knn_samples',
-                    type=int,
-                    default=10,
-                    help='number of nearest sample to choose')
-# parser.add_argument('--queue_size',
-#                     type=int,
-#                     default=2048,
-#                     help='Key memory queue size')
 parser.add_argument('--alpha',
                     type=float,
                     default=0.99,
                     help='momentum coefficient for model ema')
-parser.add_argument('--beta',
-                    type=float,
-                    default=0.99,
-                    help='label propagation coefficient')
 parser.add_argument('--lr_decay',
                     type=float,
                     default=5.,
@@ -93,11 +81,9 @@ def main():
         args.src,
         args.tgt,
         f"contrast_weight_{args.contrast_weight}",
-        f"knn_samples_{args.knn_samples}",
         f"threshold_{args.threshold}",
         f"lr_decay_{args.lr_decay}",
         f"alpha_{args.alpha}",
-        f"beta_{args.beta}",
         f"gpu_{args.gpu}"
     ]
     model_name = "_".join(setup_list)
@@ -127,7 +113,6 @@ def main():
     model_ema = model_ema.cuda()
 
     contrast_loss = LossMultiNCE(tclip=args.tclip).cuda()
-    # key_memory = KeyMemory(args.queue_size, dataset_config.bottleneck_dim).cuda()
     src_memory = KeyMemory(len(open(src_file).readlines()), dataset_config.bottleneck_dim).cuda()
     tgt_memory = KeyMemory(len(open(tgt_file).readlines()), dataset_config.bottleneck_dim).cuda()
 
@@ -142,8 +127,6 @@ def main():
     trainer = Train(model, model_ema, optimizer, lr_scheduler, group_ratios,
                     summary_writer, src_file, tgt_file, contrast_loss, src_memory, tgt_memory,
                     contrast_weight=args.contrast_weight,
-                    knn_samples=args.knn_samples,
-                    beta=args.beta,
                     threshold=args.threshold,
                     num_classes=dataset_config.num_classes,
                     lr_decay=args.lr_decay,
