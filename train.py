@@ -3,7 +3,7 @@ import tqdm
 from torch import nn
 
 from preprocess.data_provider import get_data_loader, get_certain_data_loader
-from utils import summary_write_embeddings, summary_write_figures, AverageMeter, moment_update, get_labels_from_file
+from utils import AverageMeter, moment_update, get_labels_from_file
 
 
 class Train:
@@ -90,6 +90,7 @@ class Train:
         self.src_all_labels = torch.tensor(get_labels_from_file(src_file)).cuda()
         self.tgt_all_pseudo_labels = torch.tensor([-1] * self.tgt_size).cuda()
         self.tgt_best_test_accuracy = 0.
+        self.local_dims = 7
 
     def train(self):
         # start training
@@ -163,14 +164,20 @@ class Train:
     def src_supervised_step(self, src_inputs, src_labels):
         self.model.set_bn_domain(domain=0)
         end_points = self.model(src_inputs)
-        src_logits = end_points['logits']
+        # src_logits = end_points['logits']
+
+        # (bs, num_classes, n_dims, n_dims)
+        src_local_logits = end_points['local_logits']
+        src_local_labels = src_labels.unsqueeze(1).repeat(1, self.local_dims * self.local_dims) \
+            .view(-1, self.local_dims, self.local_dims)
 
         # compute source classification loss
-        src_classification_loss = self.class_criterion(src_logits, src_labels)
+        src_classification_loss = self.class_criterion(src_local_logits, src_local_labels)
         self.losses_dict['src_classification_loss'] = src_classification_loss
 
         # compute source train accuracy
-        _, src_predicted = torch.max(src_logits.data, 1)
+        # _, src_predicted = torch.max(src_logits.data, 1)
+        src_predicted = end_points['predictions']
         src_train_accuracy = (src_predicted == src_labels).sum().item() / src_labels.size(0)
         self.src_train_accuracy_queue.put(src_train_accuracy)
 
@@ -236,6 +243,7 @@ class Train:
                 tgt_inputs, tgt_labels, tgt_indices = tgt_inputs.cuda(), tgt_labels.cuda(), tgt_indices.cuda()
                 tgt_end_points = self.model_ema(tgt_inputs)
                 correct += (tgt_end_points['predictions'] == tgt_labels).sum().item()
+                # self.tgt_memory.store_keys(tgt_end_points['features'], tgt_indices)
 
                 tgt_all_predictions.index_copy_(0, tgt_indices, tgt_end_points['predictions'])
                 tgt_all_confidences.index_copy_(0, tgt_indices, tgt_end_points['confidences'])
@@ -277,28 +285,28 @@ class Train:
             self.summary_writer.add_scalars('accuracies', self.accuracies_dict, global_step=self.iteration)
             self.summary_writer.close()
 
-        if self.epoch % self.log_image_interval == 0:
-            src_inputs, src_labels, _ = next(iter(self.data_loader['src_train']))
-            tgt_inputs, tgt_labels, _ = next(iter(self.data_loader['tgt_train']))
-            src_inputs, src_labels, tgt_inputs, tgt_labels = \
-                src_inputs.cuda(), src_labels.cuda(), tgt_inputs.cuda(), tgt_labels.cuda()
-            summary_write_figures(self.summary_writer, tag='Source predictions vs. true labels',
-                                  global_step=self.iteration,
-                                  model=self.model, images=src_inputs, labels=src_labels, domain=0)
-            summary_write_figures(self.summary_writer, tag='Target predictions vs. true labels',
-                                  global_step=self.iteration,
-                                  model=self.model, images=tgt_inputs, labels=tgt_labels, domain=1)
-            summary_write_embeddings(self.summary_writer, tag='features', global_step=self.iteration,
-                                     model=self.model,
-                                     src_train_loader=self.data_loader['src_embed'],
-                                     tgt_train_loader=self.data_loader['tgt_embed'],
-                                     num_samples=self.num_embedding_samples)
-            summary_write_embeddings(self.summary_writer, tag='logits', global_step=self.iteration,
-                                     model=self.model,
-                                     src_train_loader=self.data_loader['src_embed'],
-                                     tgt_train_loader=self.data_loader['tgt_embed'],
-                                     num_samples=self.num_embedding_samples)
-            self.model.train()
+        # if self.epoch % self.log_image_interval == 0:
+        #     src_inputs, src_labels, _ = next(iter(self.data_loader['src_train']))
+        #     tgt_inputs, tgt_labels, _ = next(iter(self.data_loader['tgt_train']))
+        #     src_inputs, src_labels, tgt_inputs, tgt_labels = \
+        #         src_inputs.cuda(), src_labels.cuda(), tgt_inputs.cuda(), tgt_labels.cuda()
+        #     summary_write_figures(self.summary_writer, tag='Source predictions vs. true labels',
+        #                           global_step=self.iteration,
+        #                           model=self.model, images=src_inputs, labels=src_labels, domain=0)
+        #     summary_write_figures(self.summary_writer, tag='Target predictions vs. true labels',
+        #                           global_step=self.iteration,
+        #                           model=self.model, images=tgt_inputs, labels=tgt_labels, domain=1)
+        #     summary_write_embeddings(self.summary_writer, tag='features', global_step=self.iteration,
+        #                              model=self.model,
+        #                              src_train_loader=self.data_loader['src_embed'],
+        #                              tgt_train_loader=self.data_loader['tgt_embed'],
+        #                              num_samples=self.num_embedding_samples)
+        #     summary_write_embeddings(self.summary_writer, tag='logits', global_step=self.iteration,
+        #                              model=self.model,
+        #                              src_train_loader=self.data_loader['src_embed'],
+        #                              tgt_train_loader=self.data_loader['tgt_embed'],
+        #                              num_samples=self.num_embedding_samples)
+        #     self.model.train()
 
         if self.epoch % self.print_interval == 0:
             # show the latest eval_result

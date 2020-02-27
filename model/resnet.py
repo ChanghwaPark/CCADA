@@ -210,13 +210,16 @@ class ResNet(nn.Module):
         return nn.Sequential(*layers)
 
     def forward(self, x):
+        local_feature = None
         for name in self.ordered_module_names:
             module = self._modules[name]
             x = module(x)
             x = x.detach() if name in self.frozen else x
+            if name == 'layer4':
+                local_feature = x
         x = x.view(x.size(0), -1)
 
-        return x
+        return x, local_feature
 
 
 def _resnet(arch, block, layers, num_domains, pretrained, progress, **kwargs):
