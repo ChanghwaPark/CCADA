@@ -80,7 +80,7 @@ class Train:
         self.iteration = 0
         self.epoch = 0
         self.total_progress_bar = tqdm.tqdm(
-            desc='Iterations', total=self.max_iter, ncols=120, ascii=True, smoothing=0.01)
+            desc='Iterations', total=self.max_iter, ascii=True, smoothing=0.01)
         self.losses_dict = {}
         self.accuracies_dict = {}
         self.src_train_accuracy_queue = AverageMeter(maxsize=100)
@@ -111,7 +111,7 @@ class Train:
 
     def train_epoch(self):
         for _ in tqdm.tqdm(range(self.iterations_per_epoch),
-                           desc='Epoch {:4d}'.format(self.epoch), ncols=120, leave=False, ascii=True):
+                           desc='Epoch {:4d}'.format(self.epoch), leave=False, ascii=True):
             self.model.train()
             self.model_ema.eval()
 
@@ -231,7 +231,7 @@ class Train:
             self.model_ema.set_bn_domain(domain=1)
             correct = 0
             for (tgt_inputs, tgt_labels, tgt_indices) in tqdm.tqdm(
-                    self.data_loader['tgt_test'], desc='Evaluation', ncols=120, leave=False, ascii=True):
+                    self.data_loader['tgt_test'], desc='Evaluation', leave=False, ascii=True):
                 tgt_inputs, tgt_labels, tgt_indices = tgt_inputs.cuda(), tgt_labels.cuda(), tgt_indices.cuda()
                 tgt_end_points = self.model_ema(tgt_inputs)
                 correct += (tgt_end_points['predictions'] == tgt_labels).sum().item()

@@ -137,7 +137,10 @@ def get_dataset_name(src_name, tgt_name):
     dataset_names = {
         'amazon': 'office',
         'dslr': 'office',
-        'webcam': 'office'
+        'webcam': 'office',
+        'c': 'image-clef',
+        'i': 'image-clef',
+        'p': 'image-clef'
     }
     assert (dataset_names[src_name] == dataset_names[tgt_name])
     return dataset_names[src_name]

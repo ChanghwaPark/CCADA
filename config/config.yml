@@ -13,6 +13,12 @@ data:
       num_classes: 65
       bottleneck_dim: 2048
 
+    image-clef:
+      network: resnet50
+      is_center: False
+      num_classes: 12
+      bottleneck_dim: 1024
+
 optimizer:
   init_lr: 0.001 # 0.004
   optim:
