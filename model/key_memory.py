@@ -18,7 +18,7 @@ class KeyMemory(nn.Module):
     def store_keys(self, batch_features, batch_indices):
         # batch_size = batch_features.size(0)
         batch_features.detach()
-        batch_indices.detach()  # TODO: does it really need?
+        batch_indices.detach()
 
         # update memory
         with torch.no_grad():

@@ -89,6 +89,7 @@ class Train:
         self.tgt_size = len(open(tgt_file).readlines())
         self.src_all_labels = torch.tensor(get_labels_from_file(src_file)).cuda()
         self.tgt_all_pseudo_labels = torch.tensor([-1] * self.tgt_size).cuda()
+        self.tgt_best_test_accuracy = 0.
 
     def train(self):
         # start training
@@ -136,7 +137,7 @@ class Train:
         src_inputs, src_labels, src_indices = self.get_sample('src_train')
 
         if self.data_loader['tgt_certain'] is not None:
-            tgt_inputs, _, tgt_indices = self.get_sample('tgt_certain')
+            tgt_inputs, tgt_indices = self.get_sample('tgt_certain')
         else:
             tgt_inputs, _, tgt_indices = self.get_sample('tgt_train')
 
@@ -240,6 +241,9 @@ class Train:
                 tgt_all_confidences.index_copy_(0, tgt_indices, tgt_end_points['confidences'])
             self.accuracies_dict['tgt_test_accuracy'] = round(correct / len(self.data_loader['tgt_test'].dataset), 5)
 
+            if self.tgt_best_test_accuracy < self.accuracies_dict['tgt_test_accuracy']:
+                self.tgt_best_test_accuracy = self.accuracies_dict['tgt_test_accuracy']
+
             # update tgt_all_pseudo_labels
             tgt_all_confident_mask = tgt_all_confidences.ge(self.threshold)
             tgt_all_uncertain_labels = torch.tensor([-1] * self.tgt_size).cuda()
@@ -247,15 +251,13 @@ class Train:
                 tgt_all_confident_mask, tgt_all_predictions, tgt_all_uncertain_labels)
 
     def prepare_tgt_certain_dataset(self):
-        tgt_all_confident_mask = self.tgt_all_pseudo_labels.ge(0)
-        if tgt_all_confident_mask.sum() < self.batch_size:
+        if self.tgt_all_pseudo_labels.ge(0).sum() < self.batch_size:  # TODO
             self.data_loader['tgt_certain'] = None
             self.data_iterator['tgt_certain'] = None
             return
 
-        tgt_all_confident_mask = tgt_all_confident_mask.cpu().tolist()
         self.data_loader['tgt_certain'] = get_certain_data_loader(
-            self.tgt_file, self.train_data_loader_kwargs, tgt_all_confident_mask, is_center=self.is_center)
+            self.tgt_file, self.train_data_loader_kwargs, self.tgt_all_pseudo_labels, is_center=self.is_center)
         self.data_iterator['tgt_certain'] = iter(self.data_loader['tgt_certain'])
 
     def get_sample(self, data_name):
@@ -302,3 +304,4 @@ class Train:
             # show the latest eval_result
             self.accuracies_dict['src_train_accuracy'] = self.src_train_accuracy_queue.get_average()
             self.total_progress_bar.write('Iteration {:6d}: '.format(self.iteration) + str(self.accuracies_dict))
+            self.total_progress_bar.write(f'Target best test accuracy: {self.tgt_best_test_accuracy}')

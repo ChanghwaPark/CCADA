@@ -1,3 +1,6 @@
+import copy
+from random import shuffle
+
 import numpy as np
 from PIL import Image
 from torch.utils.data import Dataset
@@ -85,27 +88,53 @@ class ImageList(Dataset):
 
 
 class CustomImageList(Dataset):
-    def __init__(self, summary_file, confident_mask, labels=None, transform=None, target_transform=None,
-                 loader=default_loader):
+    def __init__(self, summary_file, pseudo_labels, min_dataset_size=360, transform=None, loader=default_loader):
         image_list = open(summary_file).readlines()
-        images = make_dataset(image_list, labels)
+        images = make_dataset(image_list, None)
         assert len(images) > 0
-        confident_images = [(image, index) for index, image in enumerate(images) if confident_mask[index] is True]
-        # self.images = images
-        self.confident_images = confident_images
+
+        pseudo_labels_list = pseudo_labels.cpu().tolist()
+        assert len(images) == len(pseudo_labels_list)
+
+        confident_images = [(path, ori_index, pseudo_label) for ori_index, ((path, target), pseudo_label) in
+                            enumerate(zip(images, pseudo_labels_list)) if pseudo_label >= 0]
+
+        confident_classes = list(set(pseudo_labels_list))
+        if -1 in confident_classes:
+            confident_classes.remove(-1)
+        shuffle(confident_classes)
+
+        sorted_confident_images = {}
+        for confident_class in confident_classes:
+            sorted_confident_images[confident_class] \
+                = [(path, ori_index) for (path, ori_index, pseudo_label)
+                   in confident_images if pseudo_label == confident_class]
+            # initial shuffle
+            shuffle(sorted_confident_images[confident_class])
+
+        temp_confident_images = copy.deepcopy(sorted_confident_images)
+        num_samples = 0
+        rearranged_images = []
+        while num_samples < min_dataset_size:
+            for confident_class in confident_classes:
+                if len(temp_confident_images[confident_class]) == 0:
+                    temp_confident_images[confident_class] = copy.deepcopy(sorted_confident_images[confident_class])
+                    shuffle(temp_confident_images[confident_class])
+                rearranged_images.append(temp_confident_images[confident_class].pop())
+                num_samples += 1
+
+        self.rearranged_images = rearranged_images
         self.transform = transform
-        self.target_transform = target_transform
         self.loader = loader
 
     def __getitem__(self, index):
-        (path, target), ori_index = self.confident_images[index]
+        path, ori_index = self.rearranged_images[index]
         img = self.loader(path)
+
         if self.transform is not None:
             img = self.transform(img)
-        if self.target_transform is not None:
-            target = self.target_transform(target)
 
-        return img, target, ori_index
+        return img, ori_index
 
     def __len__(self):
-        return len(self.confident_images)
+        return len(self.rearranged_images)
