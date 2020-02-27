@@ -58,7 +58,11 @@ class Model(nn.Module):
         end_points = {}
         base_global_features, base_local_features = self.base_network(inputs)
         local_features = self.bottleneck_layer(base_local_features)
-        end_points['features'] = local_features
+        end_points['local_features'] = local_features
+
+        global_features = self.avgpool(local_features)
+        global_features = global_features.view(global_features.size(0), -1)
+        end_points['global_features'] = global_features
 
         local_logits = self.classifier_layer(local_features)
         end_points['local_logits'] = local_logits

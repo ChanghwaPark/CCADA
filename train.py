@@ -187,16 +187,17 @@ class Train:
         self.model.set_bn_domain(domain=1)
         tgt_end_points = self.model(tgt_inputs)
 
-        batch_features = torch.cat([src_end_points['features'], tgt_end_points['features']], dim=0)
+        # batch_features = torch.cat([src_end_points['features'], tgt_end_points['features']], dim=0)
+        batch_features = torch.cat([src_end_points['global_features'], tgt_end_points['global_features']], dim=0)
 
         with torch.no_grad():
             self.model_ema.set_bn_domain(domain=0)
             src_end_points_ema = self.model_ema(src_inputs)
-            self.src_memory.store_keys(src_end_points_ema['features'], src_indices)
+            self.src_memory.store_keys(src_end_points_ema['local_features'], src_indices)
 
             self.model_ema.set_bn_domain(domain=1)
             tgt_end_points_ema = self.model_ema(tgt_inputs)
-            self.tgt_memory.store_keys(tgt_end_points_ema['features'], tgt_indices)
+            self.tgt_memory.store_keys(tgt_end_points_ema['local_features'], tgt_indices)
 
         src_features_key = self.src_memory.get_queue()
         tgt_features_key = self.tgt_memory.get_queue()
