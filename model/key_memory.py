@@ -9,7 +9,6 @@ class KeyMemory(nn.Module):
         super(KeyMemory, self).__init__()
         self.queue_size = queue_size
         self.feature_dim = feature_dim
-        # self.local_dims = local_dims
         # self.index = 0
 
         stdv = 1. / math.sqrt(self.feature_dim / 3)

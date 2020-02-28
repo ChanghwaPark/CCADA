@@ -14,13 +14,8 @@ class Model(nn.Module):
         self.bn_domain = 0
         self.num_domains_bn = 2
 
-        # self.bottleneck_layer = nn.Sequential(nn.Linear(self.base_network.out_dim, bottleneck_dim),
-        #                                       BatchNormDomain(bottleneck_dim, self.num_domains_bn, nn.BatchNorm1d),
-        #                                       nn.ReLU(),
-        #                                       nn.Dropout(0.5))
-        self.bottleneck_layer = nn.Sequential(nn.Conv2d(self.base_network.out_dim, bottleneck_dim,
-                                                        kernel_size=1, stride=1, padding=0, bias=False),
-                                              BatchNormDomain(bottleneck_dim, self.num_domains_bn, nn.BatchNorm2d),
+        self.bottleneck_layer = nn.Sequential(nn.Linear(self.base_network.out_dim, bottleneck_dim),
+                                              BatchNormDomain(bottleneck_dim, self.num_domains_bn, nn.BatchNorm1d),
                                               nn.ReLU(),
                                               nn.Dropout(0.5))
 
@@ -28,19 +23,14 @@ class Model(nn.Module):
         #                               nn.ReLU(),
         #                               nn.Dropout(0.5),
         #                               nn.Linear(width, num_classes)]
-        # self.classifier_layer = nn.Sequential(nn.Linear(bottleneck_dim, num_classes))
-        self.classifier_layer = nn.Sequential(nn.Conv2d(bottleneck_dim, num_classes,
-                                                        kernel_size=1, stride=1, padding=0, bias=False))
-        self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
+        self.classifier_layer = nn.Sequential(nn.Linear(bottleneck_dim, num_classes))
         self.softmax = nn.Softmax(dim=1)
 
         # initialization
-        # self.bottleneck_layer[0].weight.data.normal_(0, 0.005)
-        # self.bottleneck_layer[0].bias.data.fill_(0.1)
-        # self.classifier_layer[0].weight.data.normal_(0, 0.01)
-        # self.classifier_layer[0].bias.data.fill_(0.0)
-        nn.init.kaiming_uniform_(self.bottleneck_layer[0].weight, a=0.005)
-        nn.init.kaiming_uniform_(self.classifier_layer[0].weight, a=0.01)
+        self.bottleneck_layer[0].weight.data.normal_(0, 0.005)
+        self.bottleneck_layer[0].bias.data.fill_(0.1)
+        self.classifier_layer[0].weight.data.normal_(0, 0.01)
+        self.classifier_layer[0].bias.data.fill_(0.0)
 
         # collect parameters
         self.parameter_list = [{"params": self.base_network.parameters(), "lr": 0.1},
@@ -56,19 +46,11 @@ class Model(nn.Module):
 
     def forward(self, inputs):
         end_points = {}
-        base_global_features, base_local_features = self.base_network(inputs)
-        local_features = self.bottleneck_layer(base_local_features)
-        end_points['local_features'] = local_features
+        base_feature = self.base_network(inputs)
+        features = self.bottleneck_layer(base_feature)
+        end_points['features'] = features
 
-        global_features = self.avgpool(local_features)
-        global_features = global_features.view(global_features.size(0), -1)
-        end_points['global_features'] = global_features
-
-        local_logits = self.classifier_layer(local_features)
-        end_points['local_logits'] = local_logits
-
-        logits = self.avgpool(local_logits)
-        logits = logits.view(logits.size(0), -1)
+        logits = self.classifier_layer(features)
         end_points['logits'] = logits
 
         # outputs 'tensor'
