@@ -19,6 +19,12 @@ data:
       num_classes: 12
       bottleneck_dim: 1024
 
+    visda:
+      network: resnet101
+      is_center: False
+      num_classes: 12
+      bottleneck_dim: 2048
+
 optimizer:
   init_lr: 0.001 # 0.004
   optim:

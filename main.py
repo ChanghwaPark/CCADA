@@ -56,7 +56,7 @@ parser.add_argument('--contrast_weight',
                     help='Weight for NCE contrast loss')
 parser.add_argument('--threshold',
                     type=float,
-                    default=0.7,
+                    default=0.9,
                     help='Confidence threshold for pseudo labeling target samples')
 parser.add_argument('--alpha',
                     type=float,
@@ -64,7 +64,7 @@ parser.add_argument('--alpha',
                     help='momentum coefficient for model ema')
 parser.add_argument('--lr_decay',
                     type=float,
-                    default=5.,
+                    default=10.,
                     help='learning rate decay coefficient')
 
 

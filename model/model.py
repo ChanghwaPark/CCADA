@@ -24,13 +24,28 @@ class Model(nn.Module):
         #                               nn.Dropout(0.5),
         #                               nn.Linear(width, num_classes)]
         self.classifier_layer = nn.Sequential(nn.Linear(bottleneck_dim, num_classes))
-        self.softmax = nn.Softmax(dim=1)
+        # self.softmax = nn.Softmax(dim=1)
 
         # initialization
-        self.bottleneck_layer[0].weight.data.normal_(0, 0.005)
-        self.bottleneck_layer[0].bias.data.fill_(0.1)
-        self.classifier_layer[0].weight.data.normal_(0, 0.01)
-        self.classifier_layer[0].bias.data.fill_(0.0)
+        # self.bottleneck_layer[0].weight.data.normal_(0, 0.005)
+        # self.bottleneck_layer[0].bias.data.fill_(0.1)
+        # self.classifier_layer[0].weight.data.normal_(0, 0.01)
+        # self.classifier_layer[0].bias.data.fill_(0.0)
+        for m in self.bottleneck_layer.modules():
+            if isinstance(m, (nn.BatchNorm2d, nn.BatchNorm1d)):
+                nn.init.constant_(m.weight, 1)
+                nn.init.constant_(m.bias, 0)
+            elif isinstance(m, nn.Linear):
+                nn.init.kaiming_normal_(m.weight)
+                nn.init.constant_(m.bias, 0)
+
+        for m in self.classifier_layer.modules():
+            if isinstance(m, (nn.BatchNorm2d, nn.BatchNorm1d)):
+                nn.init.constant_(m.weight, 1)
+                nn.init.constant_(m.bias, 0)
+            elif isinstance(m, nn.Linear):
+                nn.init.kaiming_normal_(m.weight)
+                nn.init.constant_(m.bias, 0)
 
         # collect parameters
         self.parameter_list = [{"params": self.base_network.parameters(), "lr": 0.1},
