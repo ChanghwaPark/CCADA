@@ -1,5 +1,5 @@
 data:
-  dataset_root: '/home/yoo/changhwa/datasets'
+  dataset_root: '/home/omega/datasets'
   dataset:
     office:
       network: resnet50 #ResNet50
@@ -26,11 +26,11 @@ data:
       bottleneck_dim: 2048
 
 optimizer:
-  init_lr: 0.001 # 0.004
+  init_lr: 0.004 # 0.004
   optim:
     type: sgd
     params:
-      lr: 0.001 # 0.004
+      lr: 0.004 # 0.004
       momentum: 0.9
       weight_decay: 0.0005
       nesterov: True

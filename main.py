@@ -54,9 +54,13 @@ parser.add_argument('--contrast_weight',
                     type=float,
                     default=1.,
                     help='Weight for NCE contrast loss')
+parser.add_argument('--tgt_weight',
+                    type=float,
+                    default=0.,
+                    help='Weight for tgt classification loss')
 parser.add_argument('--threshold',
                     type=float,
-                    default=0.9,
+                    default=0.7,
                     help='Confidence threshold for pseudo labeling target samples')
 parser.add_argument('--alpha',
                     type=float,
@@ -66,6 +70,10 @@ parser.add_argument('--lr_decay',
                     type=float,
                     default=10.,
                     help='learning rate decay coefficient')
+parser.add_argument('--confident_classes',
+                    type=int,
+                    default=18,
+                    help='minimum number of confident classes')
 
 
 def main():
@@ -80,14 +88,16 @@ def main():
     setup_list = [
         args.src,
         args.tgt,
+        f"tgt_weight_{args.tgt_weight}",
         f"contrast_weight_{args.contrast_weight}",
         f"threshold_{args.threshold}",
+        f"confident_classes_{args.confident_classes}",
         f"lr_decay_{args.lr_decay}",
         f"alpha_{args.alpha}",
         f"gpu_{args.gpu}"
     ]
     model_name = "_".join(setup_list)
-    print(colored(f"Model name: {model_name}", 'blue'))
+    print(colored(f"Model name: {model_name}", 'green'))
     model_dir = os.path.join(config.log.log_dir, model_name)
 
     if os.path.isdir(model_dir):
@@ -126,8 +136,10 @@ def main():
 
     trainer = Train(model, model_ema, optimizer, lr_scheduler, group_ratios,
                     summary_writer, src_file, tgt_file, contrast_loss, src_memory, tgt_memory,
+                    tgt_weight=args.tgt_weight,
                     contrast_weight=args.contrast_weight,
                     threshold=args.threshold,
+                    confident_classes=args.confident_classes,
                     num_classes=dataset_config.num_classes,
                     lr_decay=args.lr_decay,
                     batch_size=args.batch_size,

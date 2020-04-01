@@ -9,8 +9,10 @@ from utils import summary_write_embeddings, summary_write_figures, AverageMeter,
 class Train:
     def __init__(self, model, model_ema, optimizer, lr_scheduler, group_ratios,
                  summary_writer, src_file, tgt_file, contrast_loss, src_memory, tgt_memory,
+                 tgt_weight=1.0,
                  contrast_weight=1.0,
                  threshold=0.7,
+                 confident_classes=12,
                  num_classes=31,
                  lr_decay=5,
                  batch_size=36,
@@ -35,8 +37,10 @@ class Train:
         self.contrast_loss = contrast_loss
         self.src_memory = src_memory
         self.tgt_memory = tgt_memory
+        self.tgt_weight = tgt_weight
         self.contrast_weight = contrast_weight
         self.threshold = threshold
+        self.confident_classes = confident_classes
         self.num_classes = num_classes
         self.lr_decay = lr_decay
         self.batch_size = batch_size
@@ -144,45 +148,16 @@ class Train:
         src_inputs, src_labels, src_indices, tgt_inputs, tgt_indices \
             = src_inputs.cuda(), src_labels.cuda(), src_indices.cuda(), tgt_inputs.cuda(), tgt_indices.cuda()
 
-        # source classification
-        self.src_supervised_step(src_inputs, src_labels)
+        # tgt pseudo labels
+        tgt_pseudo_labels = torch.gather(self.tgt_all_pseudo_labels, dim=0, index=tgt_indices)
 
-        # class contrastive alignment
-        self.contrastive_step(src_inputs, src_indices, tgt_inputs, tgt_indices)
-
-        self.losses_dict['total_loss'] = \
-            self.losses_dict['src_classification_loss'] + self.contrast_weight * self.losses_dict['contrast_loss']
-        self.losses_dict['total_loss'].backward()
-        self.optimizer.step()
-
-        moment_update(self.model, self.model_ema, self.alpha)
-
-        self.iteration += 1
-        self.total_progress_bar.update(1)
-
-    def src_supervised_step(self, src_inputs, src_labels):
-        self.model.set_bn_domain(domain=0)
-        end_points = self.model(src_inputs)
-        src_logits = end_points['logits']
-
-        # compute source classification loss
-        src_classification_loss = self.class_criterion(src_logits, src_labels)
-        self.losses_dict['src_classification_loss'] = src_classification_loss
-
-        # compute source train accuracy
-        # _, src_predicted = torch.max(src_logits.data, 1)
-        src_predicted = end_points['predictions']
-        src_train_accuracy = (src_predicted == src_labels).sum().item() / src_labels.size(0)
-        self.src_train_accuracy_queue.put(src_train_accuracy)
-
-    def contrastive_step(self, src_inputs, src_indices, tgt_inputs, tgt_indices):
+        # model inference
         self.model.set_bn_domain(domain=0)
         src_end_points = self.model(src_inputs)
         self.model.set_bn_domain(domain=1)
         tgt_end_points = self.model(tgt_inputs)
 
-        batch_features = torch.cat([src_end_points['features'], tgt_end_points['features']], dim=0)
-
+        # update key memory
         with torch.no_grad():
             self.model_ema.set_bn_domain(domain=0)
             src_end_points_ema = self.model_ema(src_inputs)
@@ -192,16 +167,53 @@ class Train:
             tgt_end_points_ema = self.model_ema(tgt_inputs)
             self.tgt_memory.store_keys(tgt_end_points_ema['features'], tgt_indices)
 
+        # source classification
+        self.src_supervised_step(src_end_points, src_labels)
+
+        # target pseudo classification
+        self.tgt_supervised_step(tgt_end_points, tgt_pseudo_labels)
+
+        # class contrastive alignment
+        self.contrastive_step(src_end_points, src_labels, tgt_end_points, tgt_pseudo_labels)
+
+        self.losses_dict['total_loss'] = \
+            self.losses_dict['src_classification_loss'] \
+            + self.tgt_weight * self.losses_dict['tgt_classification_loss'] \
+            + self.contrast_weight * self.losses_dict['contrast_loss']
+        self.losses_dict['total_loss'].backward()
+        self.optimizer.step()
+
+        moment_update(self.model, self.model_ema, self.alpha)
+
+        self.iteration += 1
+        self.total_progress_bar.update(1)
+
+    def src_supervised_step(self, src_end_points, src_labels):
+        # compute source classification loss
+        src_classification_loss = self.class_criterion(src_end_points['logits'], src_labels)
+        self.losses_dict['src_classification_loss'] = src_classification_loss
+
+        # compute source train accuracy
+        src_train_accuracy = (src_end_points['predictions'] == src_labels).sum().item() / src_labels.size(0)
+        self.src_train_accuracy_queue.put(src_train_accuracy)
+
+    def tgt_supervised_step(self, tgt_end_points, tgt_pseudo_labels):
+        if self.data_loader['tgt_certain'] is not None:
+            tgt_classification_loss = self.class_criterion(tgt_end_points['logits'], tgt_pseudo_labels)
+        else:
+            tgt_classification_loss = 0.
+        self.losses_dict['tgt_classification_loss'] = tgt_classification_loss
+
+    def contrastive_step(self, src_end_points, src_labels, tgt_end_points, tgt_pseudo_labels):
+        batch_features = torch.cat([src_end_points['features'], tgt_end_points['features']], dim=0)
+
         src_features_key = self.src_memory.get_queue()
         tgt_features_key = self.tgt_memory.get_queue()
         src_features_key, tgt_features_key = src_features_key.cuda(), tgt_features_key.cuda()
         all_features_key = torch.cat([src_features_key, tgt_features_key], dim=0)
 
-        tgt_indices = tgt_indices + self.src_size
-        batch_indices = torch.cat([src_indices, tgt_indices], dim=0)
-
         all_labels = torch.cat([self.src_all_labels, self.tgt_all_pseudo_labels], dim=0)
-        batch_labels = all_labels.gather(dim=0, index=batch_indices)
+        batch_labels = torch.cat([src_labels, tgt_pseudo_labels], dim=0)
         active_batch_mask = batch_labels.ge(0)
         active_all_mask = all_labels.ge(0)
 
@@ -252,7 +264,12 @@ class Train:
                 tgt_all_confident_mask, tgt_all_predictions, tgt_all_uncertain_labels)
 
     def prepare_tgt_certain_dataset(self):
-        if self.tgt_all_pseudo_labels.ge(0).sum() < self.batch_size:  # TODO
+        tgt_all_pseudo_labels_list = self.tgt_all_pseudo_labels.cpu().tolist()
+        confident_classes = list(set(tgt_all_pseudo_labels_list))
+        if -1 in confident_classes:
+            confident_classes.remove(-1)
+        # if self.tgt_all_pseudo_labels.ge(0).sum() < self.batch_size:  # TODO
+        if len(confident_classes) < self.confident_classes:
             self.data_loader['tgt_certain'] = None
             self.data_iterator['tgt_certain'] = None
             return

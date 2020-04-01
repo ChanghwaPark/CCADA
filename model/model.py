@@ -14,10 +14,11 @@ class Model(nn.Module):
         self.bn_domain = 0
         self.num_domains_bn = 2
 
-        self.bottleneck_layer = nn.Sequential(nn.Linear(self.base_network.out_dim, bottleneck_dim),
-                                              BatchNormDomain(bottleneck_dim, self.num_domains_bn, nn.BatchNorm1d),
-                                              nn.ReLU(),
-                                              nn.Dropout(0.5))
+        self.bottleneck_layer = nn.Sequential(
+            nn.Linear(self.base_network.out_dim, bottleneck_dim),
+            BatchNormDomain(bottleneck_dim, self.num_domains_bn, nn.BatchNorm1d),
+            nn.ReLU(),
+            nn.Dropout(0.5))
 
         # self.classifier_layer_list = [nn.Linear(bottleneck_dim, width),
         #                               nn.ReLU(),
