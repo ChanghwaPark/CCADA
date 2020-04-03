@@ -138,3 +138,72 @@ class CustomImageList(Dataset):
 
     def __len__(self):
         return len(self.rearranged_images)
+
+
+class UniformImageList(Dataset):
+    """
+    Args:
+        summary_file (file_path): Path to images summary file
+        transform (callable, optional): A function/transform that  takes in an PIL image
+            and returns a transformed version. E.g, ``transforms.RandomCrop``
+        target_transform (callable, optional): A function/transform that takes in the
+            target and transforms it.
+        loader (callable, optional): A function to load an image given its path.
+    """
+
+    # def __init__(self, image_list, labels=None, transform=None, target_transform=None,
+    #              loader=default_loader):
+    def __init__(self, summary_file, labels=None, transform=None, target_transform=None,
+                 loader=default_loader):
+        image_list = open(summary_file).readlines()
+        images = make_dataset(image_list, labels)
+        assert len(images) > 0
+
+        # indexed_images = [(path, ori_index, target) for ori_index, (path, target) in enumerate(images)]
+        targets = [target for (_, target) in images]
+        target_classes = list(set(targets))
+        shuffle(target_classes)
+
+        sorted_images = {}
+        max_class_len = 0
+        for target_class in target_classes:
+            sorted_images[target_class] = [(path, ori_index, target) for ori_index, (path, target) in
+                                           enumerate(images) if target == target_class]
+            shuffle(sorted_images[target_class])
+            if max_class_len < len(sorted_images[target_class]):
+                max_class_len = len(sorted_images[target_class])
+
+        temp_sorted_images = copy.deepcopy(sorted_images)
+        rearranged_images = []
+        for _ in range(max_class_len):
+            for target_class in target_classes:
+                if len(temp_sorted_images[target_class]) == 0:
+                    temp_sorted_images[target_class] = copy.deepcopy(sorted_images[target_class])
+                    shuffle(temp_sorted_images[target_class])
+                rearranged_images.append(temp_sorted_images[target_class].pop())
+
+        # self.images = images
+        self.images = rearranged_images
+        self.transform = transform
+        self.target_transform = target_transform
+        self.loader = loader
+
+    def __getitem__(self, index):
+        """
+        Args:
+            index (int): Index
+        Returns:
+            tuple: (image, target) where target is class_index of the target class.
+        """
+        path, ori_index, target = self.images[index]
+        img = self.loader(path)
+        if self.transform is not None:
+            img = self.transform(img)
+        if self.target_transform is not None:
+            target = self.target_transform(target)
+
+        # return img, target
+        return img, target, ori_index
+
+    def __len__(self):
+        return len(self.images)

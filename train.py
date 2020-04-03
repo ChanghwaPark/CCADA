@@ -2,7 +2,7 @@ import torch
 import tqdm
 from torch import nn
 
-from preprocess.data_provider import get_data_loader, get_certain_data_loader
+from preprocess.data_provider import get_data_loader, get_certain_data_loader, get_uniform_data_loader
 from utils import summary_write_embeddings, summary_write_figures, AverageMeter, moment_update, get_labels_from_file
 
 
@@ -67,8 +67,8 @@ class Train:
             'batch_size': self.eval_batch_size,
             'num_workers': self.num_workers
         }
-        self.data_loader = {'src_train': get_data_loader(self.src_file, self.train_data_loader_kwargs,
-                                                         training=True, is_center=self.is_center),
+        self.data_loader = {'src_train': get_uniform_data_loader(self.src_file, self.train_data_loader_kwargs,
+                                                                 is_center=self.is_center),
                             'tgt_train': get_data_loader(self.tgt_file, self.train_data_loader_kwargs,
                                                          training=True, is_center=self.is_center),
                             'tgt_certain': None,
@@ -94,6 +94,7 @@ class Train:
         self.src_all_labels = torch.tensor(get_labels_from_file(src_file)).cuda()
         self.tgt_all_pseudo_labels = torch.tensor([-1] * self.tgt_size).cuda()
         self.tgt_best_test_accuracy = 0.
+        self.min_dataset_size = self.batch_size * self.iterations_per_epoch
 
     def train(self):
         # start training
@@ -170,11 +171,17 @@ class Train:
         # source classification
         self.src_supervised_step(src_end_points, src_labels)
 
-        # target pseudo classification
-        self.tgt_supervised_step(tgt_end_points, tgt_pseudo_labels)
+        if self.data_loader['tgt_certain'] is not None:
+            # target pseudo classification
+            self.tgt_supervised_step(tgt_end_points, tgt_pseudo_labels)
 
-        # class contrastive alignment
-        self.contrastive_step(src_end_points, src_labels, tgt_end_points, tgt_pseudo_labels)
+            # class contrastive alignment
+            self.contrastive_step(src_end_points, src_labels, tgt_end_points, tgt_pseudo_labels)
+        else:
+            self.losses_dict['tgt_classification_loss'] = 0.
+            self.losses_dict['query_to_key_loss'] = 0.
+            self.losses_dict['contrast_norm_loss'] = 0.
+            self.losses_dict['contrast_loss'] = 0.
 
         self.losses_dict['total_loss'] = \
             self.losses_dict['src_classification_loss'] \
@@ -198,10 +205,7 @@ class Train:
         self.src_train_accuracy_queue.put(src_train_accuracy)
 
     def tgt_supervised_step(self, tgt_end_points, tgt_pseudo_labels):
-        if self.data_loader['tgt_certain'] is not None:
-            tgt_classification_loss = self.class_criterion(tgt_end_points['logits'], tgt_pseudo_labels)
-        else:
-            tgt_classification_loss = 0.
+        tgt_classification_loss = self.class_criterion(tgt_end_points['logits'], tgt_pseudo_labels)
         self.losses_dict['tgt_classification_loss'] = tgt_classification_loss
 
     def contrastive_step(self, src_end_points, src_labels, tgt_end_points, tgt_pseudo_labels):
@@ -248,6 +252,8 @@ class Train:
                     self.data_loader['tgt_test'], desc='Evaluation', leave=False, ascii=True):
                 tgt_inputs, tgt_labels, tgt_indices = tgt_inputs.cuda(), tgt_labels.cuda(), tgt_indices.cuda()
                 tgt_end_points = self.model_ema(tgt_inputs)
+                # self.tgt_memory.store_keys(tgt_end_points['features'], tgt_indices)  # TODO
+
                 correct += (tgt_end_points['predictions'] == tgt_labels).sum().item()
 
                 tgt_all_predictions.index_copy_(0, tgt_indices, tgt_end_points['predictions'])
@@ -275,13 +281,17 @@ class Train:
             return
 
         self.data_loader['tgt_certain'] = get_certain_data_loader(
-            self.tgt_file, self.train_data_loader_kwargs, self.tgt_all_pseudo_labels, is_center=self.is_center)
+            self.tgt_file, self.train_data_loader_kwargs, self.tgt_all_pseudo_labels,
+            min_dataset_size=self.min_dataset_size, is_center=self.is_center)
         self.data_iterator['tgt_certain'] = iter(self.data_loader['tgt_certain'])
 
     def get_sample(self, data_name):
         try:
             sample = next(self.data_iterator[data_name])
         except StopIteration:
+            if data_name == 'src_train':
+                self.data_loader[data_name] = get_uniform_data_loader(self.src_file, self.train_data_loader_kwargs,
+                                                                      is_center=self.is_center)
             self.data_iterator[data_name] = iter(self.data_loader[data_name])
             sample = next(self.data_iterator[data_name])
         except TypeError:
