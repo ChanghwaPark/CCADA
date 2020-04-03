@@ -1,3 +1,5 @@
+import random
+
 import torch
 import tqdm
 from torch import nn
@@ -13,6 +15,7 @@ class Train:
                  contrast_weight=1.0,
                  threshold=0.7,
                  confident_classes=12,
+                 max_key_feature_size=4096,
                  num_classes=31,
                  lr_decay=5,
                  batch_size=36,
@@ -21,7 +24,6 @@ class Train:
                  is_center=False,
                  max_iter=100000,
                  iterations_per_epoch=10,
-                 log_scalar_interval=1,
                  print_interval=10,
                  log_image_interval=100,
                  num_embedding_samples=384,
@@ -35,6 +37,7 @@ class Train:
         self.src_file = src_file
         self.tgt_file = tgt_file
         self.contrast_loss = contrast_loss
+        self.max_key_feature_size = max_key_feature_size
         self.src_memory = src_memory
         self.tgt_memory = tgt_memory
         self.tgt_weight = tgt_weight
@@ -49,7 +52,6 @@ class Train:
         self.is_center = is_center
         self.max_iter = max_iter
         self.iterations_per_epoch = iterations_per_epoch
-        self.log_scalar_interval = log_scalar_interval
         self.print_interval = print_interval
         self.log_image_interval = log_image_interval
         self.num_embedding_samples = num_embedding_samples
@@ -93,6 +95,7 @@ class Train:
         self.tgt_size = len(open(tgt_file).readlines())
         self.src_all_labels = torch.tensor(get_labels_from_file(src_file)).cuda()
         self.tgt_all_pseudo_labels = torch.tensor([-1] * self.tgt_size).cuda()
+        self.tgt_certain_indices = torch.tensor([]).cuda()
         self.tgt_best_test_accuracy = 0.
         self.min_dataset_size = self.batch_size * self.iterations_per_epoch
 
@@ -210,30 +213,42 @@ class Train:
 
     def contrastive_step(self, src_end_points, src_labels, tgt_end_points, tgt_pseudo_labels):
         batch_features = torch.cat([src_end_points['features'], tgt_end_points['features']], dim=0)
-
-        src_features_key = self.src_memory.get_queue()
-        tgt_features_key = self.tgt_memory.get_queue()
-        src_features_key, tgt_features_key = src_features_key.cuda(), tgt_features_key.cuda()
-        all_features_key = torch.cat([src_features_key, tgt_features_key], dim=0)
-
-        all_labels = torch.cat([self.src_all_labels, self.tgt_all_pseudo_labels], dim=0)
         batch_labels = torch.cat([src_labels, tgt_pseudo_labels], dim=0)
-        active_batch_mask = batch_labels.ge(0)
-        active_all_mask = all_labels.ge(0)
+        assert batch_labels.lt(0).sum().cpu().numpy() == 0
+
+        if self.max_key_feature_size < self.src_size:
+            src_selected_indices = torch.tensor(random.sample(range(self.src_size), self.max_key_feature_size)).cuda()
+        else:
+            src_selected_indices = torch.tensor(range(self.src_size)).cuda()
+        src_key_features = self.src_memory.get_queue(src_selected_indices)
+
+        if self.max_key_feature_size < len(self.tgt_certain_indices):
+            tgt_selected_indices = torch.tensor(
+                random.sample(self.tgt_certain_indices.tolist(), self.max_key_feature_size)).cuda()
+        else:
+            tgt_selected_indices = self.tgt_certain_indices
+        tgt_key_features = self.tgt_memory.get_queue(tgt_selected_indices)
+
+        key_features = torch.cat([src_key_features, tgt_key_features], dim=0)
+
+        src_key_labels = torch.index_select(self.src_all_labels, dim=0, index=src_selected_indices)
+        tgt_key_labels = torch.index_select(self.tgt_all_pseudo_labels, dim=0, index=tgt_selected_indices)
+
+        key_labels = torch.cat([src_key_labels, tgt_key_labels], dim=0)
 
         # (batch_size, key_size)
-        active_mask_matrix = active_all_mask & active_batch_mask.unsqueeze(1)
+        # active_mask_matrix = batch_labels.ge(0).unsqueeze(1).repeat(1, len(key_labels))
 
         # (batch_size, key_size)
-        pos_matrix = (all_labels == batch_labels.unsqueeze(1))
-        pos_matrix = (pos_matrix & active_mask_matrix).float()
+        pos_matrix = (key_labels == batch_labels.unsqueeze(1)).float()
+        # pos_matrix = (pos_matrix & active_mask_matrix).float()
 
         # (batch_size, key_size)
-        neg_matrix = (all_labels != batch_labels.unsqueeze(1))
-        neg_matrix = (neg_matrix & active_mask_matrix).float()
+        neg_matrix = (key_labels != batch_labels.unsqueeze(1)).float()
+        # neg_matrix = (neg_matrix & active_mask_matrix).float()
 
         query_to_key_loss, contrast_norm_loss = \
-            self.contrast_loss(batch_features, all_features_key, pos_matrix, neg_matrix)
+            self.contrast_loss(batch_features, key_features, pos_matrix, neg_matrix)
         self.losses_dict['query_to_key_loss'] = query_to_key_loss
         self.losses_dict['contrast_norm_loss'] = contrast_norm_loss
 
@@ -268,9 +283,12 @@ class Train:
             tgt_all_uncertain_labels = torch.tensor([-1] * self.tgt_size).cuda()
             self.tgt_all_pseudo_labels = torch.where(
                 tgt_all_confident_mask, tgt_all_predictions, tgt_all_uncertain_labels)
+            tgt_certain_indices_list = [index for (index, pseudo_label) in enumerate(self.tgt_all_pseudo_labels)
+                                        if pseudo_label >= 0]
+            self.tgt_certain_indices = torch.tensor(tgt_certain_indices_list).cuda()
 
     def prepare_tgt_certain_dataset(self):
-        tgt_all_pseudo_labels_list = self.tgt_all_pseudo_labels.cpu().tolist()
+        tgt_all_pseudo_labels_list = self.tgt_all_pseudo_labels.tolist()
         confident_classes = list(set(tgt_all_pseudo_labels_list))
         if -1 in confident_classes:
             confident_classes.remove(-1)
@@ -300,12 +318,11 @@ class Train:
         return sample
 
     def log_summary_writer(self):
-        if self.epoch % self.log_scalar_interval == 0:
-            self.summary_writer.add_scalars('losses', self.losses_dict, global_step=self.iteration)
-            self.summary_writer.add_scalars('accuracies', self.accuracies_dict, global_step=self.iteration)
-            self.summary_writer.close()
+        self.summary_writer.add_scalars('losses', self.losses_dict, global_step=self.iteration)
+        self.summary_writer.add_scalars('accuracies', self.accuracies_dict, global_step=self.iteration)
+        self.summary_writer.close()
 
-        if self.epoch % self.log_image_interval == 0:
+        if self.iteration % self.log_image_interval == 0:
             src_inputs, src_labels, _ = next(iter(self.data_loader['src_train']))
             tgt_inputs, tgt_labels, _ = next(iter(self.data_loader['tgt_train']))
             src_inputs, src_labels, tgt_inputs, tgt_labels = \
@@ -328,7 +345,7 @@ class Train:
                                      num_samples=self.num_embedding_samples)
             self.model.train()
 
-        if self.epoch % self.print_interval == 0:
+        if self.iteration % self.print_interval == 0:
             # show the latest eval_result
             self.accuracies_dict['src_train_accuracy'] = self.src_train_accuracy_queue.get_average()
             self.total_progress_bar.write('Iteration {:6d}: '.format(self.iteration) + str(self.accuracies_dict))

@@ -34,13 +34,9 @@ parser.add_argument('--eval_batch_size',
                     type=int,
                     default=36,
                     help='Batch size for both training and evaluation')
-parser.add_argument('--iterations_per_epoch',
-                    type=int,
-                    default=10,
-                    help='Number of iterations per epoch')
 parser.add_argument('--gpu',
                     type=str,
-                    default='2',
+                    default='0',
                     help='Selected gpu index')
 parser.add_argument('--num_workers',
                     type=int,
@@ -74,6 +70,10 @@ parser.add_argument('--confident_classes',
                     type=int,
                     default=18,
                     help='minimum number of confident classes')
+parser.add_argument('--max_key_feature_size',
+                    type=int,
+                    default=4096,
+                    help='maximum number of key feature size computed in the model')
 
 
 def main():
@@ -92,6 +92,7 @@ def main():
         f"contrast_weight_{args.contrast_weight}",
         f"threshold_{args.threshold}",
         f"confident_classes_{args.confident_classes}",
+        f"max_key_size_{args.max_key_feature_size}",
         f"lr_decay_{args.lr_decay}",
         f"alpha_{args.alpha}",
         f"gpu_{args.gpu}"
@@ -140,6 +141,7 @@ def main():
                     contrast_weight=args.contrast_weight,
                     threshold=args.threshold,
                     confident_classes=args.confident_classes,
+                    max_key_feature_size=args.max_key_feature_size,
                     num_classes=dataset_config.num_classes,
                     lr_decay=args.lr_decay,
                     batch_size=args.batch_size,
@@ -147,8 +149,7 @@ def main():
                     num_workers=args.num_workers,
                     is_center=dataset_config.is_center,
                     max_iter=config.train.max_iteration,
-                    iterations_per_epoch=args.iterations_per_epoch,
-                    log_scalar_interval=config.log.log_scalar_interval,
+                    iterations_per_epoch=dataset_config.iterations_per_epoch,
                     print_interval=config.log.print_interval,
                     log_image_interval=config.log.log_image_interval,
                     num_embedding_samples=config.log.num_embedding_samples,

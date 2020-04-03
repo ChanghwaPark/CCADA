@@ -29,9 +29,10 @@ class KeyMemory(nn.Module):
             self.features.index_copy_(0, batch_indices, batch_features)
             # self.index = (self.index + batch_size) % self.queue_size
 
-    def get_queue(self):
+    def get_queue(self, selected_indices):
         features = self.features.clone()
-        return features
+        selected_features = torch.index_select(features, dim=0, index=selected_indices)
+        return selected_features
 
     def get_size(self):
         return self.queue_size, self.feature_dim

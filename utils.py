@@ -140,7 +140,13 @@ def get_dataset_name(src_name, tgt_name):
         'webcam': 'office',
         'c': 'image-clef',
         'i': 'image-clef',
-        'p': 'image-clef'
+        'p': 'image-clef',
+        'art': 'office-home',
+        'clipart': 'office-home',
+        'product': 'office-home',
+        'real_world': 'office-home',
+        'visda_src': 'visda',
+        'visda_tgt': 'visda'
     }
     assert (dataset_names[src_name] == dataset_names[tgt_name])
     return dataset_names[src_name]

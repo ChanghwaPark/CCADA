@@ -6,24 +6,28 @@ data:
       is_center: False
       num_classes: 31
       bottleneck_dim: 1024
+      iterations_per_epoch: 10
 
     office-home:
       network: resnet50 #ResNet50
       is_center: False  # True
       num_classes: 65
       bottleneck_dim: 2048
+      iterations_per_epoch: 50
 
     image-clef:
       network: resnet50
       is_center: False
       num_classes: 12
       bottleneck_dim: 1024
+      iterations_per_epoch: 10
 
     visda:
       network: resnet101
       is_center: False
       num_classes: 12
       bottleneck_dim: 2048
+      iterations_per_epoch: 100
 
 optimizer:
   init_lr: 0.004 # 0.004
@@ -37,14 +41,13 @@ optimizer:
 
   lr_scheduler:
     type: inv
-    gamma: 0.001
-    decay_rate: 0.75
+    gamma: 0.001 # 0.0005
+    decay_rate: 0.75 # 2.25
 
 log:
   log_dir: 'logs'
-  log_scalar_interval: 1
-  print_interval: 10
-  log_image_interval: 100
+  print_interval: 100
+  log_image_interval: 1000
   num_embedding_samples: 384
 
 train:
