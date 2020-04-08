@@ -23,7 +23,7 @@ data:
       iterations_per_epoch: 10
 
     visda:
-      network: resnet50 # resnet101
+      network: resnet101 # resnet101
       is_center: False
       num_classes: 12
       bottleneck_dim: 2048

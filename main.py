@@ -155,7 +155,10 @@ def main():
                     num_embedding_samples=config.log.num_embedding_samples,
                     alpha=args.alpha)
 
-    trainer.train()
+    tgt_best_accuracy = trainer.train()
+    with open('results.txt', 'a') as f:
+        f.write(model_name + '     ' + str(tgt_best_accuracy) + '\n')
+        f.close()
 
 
 if __name__ == '__main__':

@@ -41,8 +41,8 @@ optimizer:
 
   lr_scheduler:
     type: inv
-    gamma: 0.001 # 0.0005
-    decay_rate: 0.75 # 2.25
+    gamma: 0.0005 # 0.001
+    decay_rate: 2.25 # 0.75
 
 log:
   log_dir: 'logs'

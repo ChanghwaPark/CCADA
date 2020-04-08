@@ -117,6 +117,7 @@ class Train:
             self.log_summary_writer()
 
         self.total_progress_bar.write('Finish training')
+        return self.tgt_best_test_accuracy
 
     def train_epoch(self):
         for _ in tqdm.tqdm(range(self.iterations_per_epoch),
