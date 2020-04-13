@@ -14,8 +14,9 @@ class Train:
                  tgt_weight=1.0,
                  contrast_weight=1.0,
                  threshold=0.7,
-                 confident_classes=12,
-                 max_key_feature_size=4096,
+                 confident_classes=10,
+                 confident_samples=4,
+                 max_key_feature_size=16384,
                  num_classes=31,
                  lr_decay=5,
                  batch_size=36,
@@ -43,7 +44,8 @@ class Train:
         self.tgt_weight = tgt_weight
         self.contrast_weight = contrast_weight
         self.threshold = threshold
-        self.confident_classes = confident_classes
+        self.num_confident_classes = confident_classes
+        self.num_confident_samples = confident_samples
         self.num_classes = num_classes
         self.lr_decay = lr_decay
         self.batch_size = batch_size
@@ -95,6 +97,7 @@ class Train:
         self.tgt_size = len(open(tgt_file).readlines())
         self.src_all_labels = torch.tensor(get_labels_from_file(src_file)).cuda()
         self.tgt_all_pseudo_labels = torch.tensor([-1] * self.tgt_size).cuda()
+        self.src_updated_flag = torch.tensor([False] * self.src_size).cuda()
         self.tgt_certain_indices = torch.tensor([]).cuda()
         self.tgt_best_test_accuracy = 0.
         self.min_dataset_size = self.batch_size * self.iterations_per_epoch
@@ -172,6 +175,8 @@ class Train:
             tgt_end_points_ema = self.model_ema(tgt_inputs)
             self.tgt_memory.store_keys(tgt_end_points_ema['features'], tgt_indices)
 
+        self.src_updated_flag[src_indices] = True
+
         # source classification
         self.src_supervised_step(src_end_points, src_labels)
 
@@ -217,10 +222,12 @@ class Train:
         batch_labels = torch.cat([src_labels, tgt_pseudo_labels], dim=0)
         assert batch_labels.lt(0).sum().cpu().numpy() == 0
 
-        if self.max_key_feature_size < self.src_size:
-            src_selected_indices = torch.tensor(random.sample(range(self.src_size), self.max_key_feature_size)).cuda()
+        src_updated_indices = torch.tensor(range(self.src_size)).cuda()[self.src_updated_flag]
+        if self.max_key_feature_size < len(src_updated_indices):
+            src_selected_indices = torch.tensor(
+                random.sample(src_updated_indices.tolist(), self.max_key_feature_size)).cuda()
         else:
-            src_selected_indices = torch.tensor(range(self.src_size)).cuda()
+            src_selected_indices = src_updated_indices
         src_key_features = self.src_memory.get_queue(src_selected_indices)
 
         if self.max_key_feature_size < len(self.tgt_certain_indices):
@@ -238,15 +245,10 @@ class Train:
         key_labels = torch.cat([src_key_labels, tgt_key_labels], dim=0)
 
         # (batch_size, key_size)
-        # active_mask_matrix = batch_labels.ge(0).unsqueeze(1).repeat(1, len(key_labels))
-
-        # (batch_size, key_size)
         pos_matrix = (key_labels == batch_labels.unsqueeze(1)).float()
-        # pos_matrix = (pos_matrix & active_mask_matrix).float()
 
         # (batch_size, key_size)
         neg_matrix = (key_labels != batch_labels.unsqueeze(1)).float()
-        # neg_matrix = (neg_matrix & active_mask_matrix).float()
 
         query_to_key_loss, contrast_norm_loss = \
             self.contrast_loss(batch_features, key_features, pos_matrix, neg_matrix)
@@ -268,7 +270,7 @@ class Train:
                     self.data_loader['tgt_test'], desc='Evaluation', leave=False, ascii=True):
                 tgt_inputs, tgt_labels, tgt_indices = tgt_inputs.cuda(), tgt_labels.cuda(), tgt_indices.cuda()
                 tgt_end_points = self.model_ema(tgt_inputs)
-                # self.tgt_memory.store_keys(tgt_end_points['features'], tgt_indices)  # TODO
+                self.tgt_memory.store_keys(tgt_end_points['features'], tgt_indices)  # TODO
 
                 correct += (tgt_end_points['predictions'] == tgt_labels).sum().item()
 
@@ -293,15 +295,18 @@ class Train:
         confident_classes = list(set(tgt_all_pseudo_labels_list))
         if -1 in confident_classes:
             confident_classes.remove(-1)
-        # if self.tgt_all_pseudo_labels.ge(0).sum() < self.batch_size:  # TODO
-        if len(confident_classes) < self.confident_classes:
+        for confident_class in confident_classes:
+            if tgt_all_pseudo_labels_list.count(confident_class) < self.num_confident_samples:
+                confident_classes.remove(confident_class)
+
+        if len(confident_classes) < self.num_confident_classes:
             self.data_loader['tgt_certain'] = None
             self.data_iterator['tgt_certain'] = None
             return
 
         self.data_loader['tgt_certain'] = get_certain_data_loader(
             self.tgt_file, self.train_data_loader_kwargs, self.tgt_all_pseudo_labels,
-            min_dataset_size=self.min_dataset_size, is_center=self.is_center)
+            num_confident_samples=self.num_confident_samples, is_center=self.is_center)
         self.data_iterator['tgt_certain'] = iter(self.data_loader['tgt_certain'])
 
     def get_sample(self, data_name):
@@ -309,8 +314,12 @@ class Train:
             sample = next(self.data_iterator[data_name])
         except StopIteration:
             if data_name == 'src_train':
-                self.data_loader[data_name] = get_uniform_data_loader(self.src_file, self.train_data_loader_kwargs,
-                                                                      is_center=self.is_center)
+                self.data_loader[data_name] = \
+                    get_uniform_data_loader(self.src_file, self.train_data_loader_kwargs, is_center=self.is_center)
+            if data_name == 'tgt_certain':
+                self.data_loader[data_name] = \
+                    get_certain_data_loader(self.tgt_file, self.train_data_loader_kwargs, self.tgt_all_pseudo_labels,
+                                            num_confident_samples=self.num_confident_samples, is_center=self.is_center)
             self.data_iterator[data_name] = iter(self.data_loader[data_name])
             sample = next(self.data_iterator[data_name])
         except TypeError:

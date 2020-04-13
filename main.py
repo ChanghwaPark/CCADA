@@ -20,11 +20,11 @@ parser.add_argument('--config_file',
                     help='Dataset configuration parameters')
 parser.add_argument('--src',
                     type=str,
-                    default='dslr',
+                    default='visda_src',
                     help='Source dataset name')
 parser.add_argument('--tgt',
                     type=str,
-                    default='amazon',
+                    default='visda_tgt',
                     help='Target dataset name')
 parser.add_argument('--batch_size',
                     type=int,
@@ -48,19 +48,19 @@ parser.add_argument('--tclip',
                     help='Soft clipping range for NCE scores')
 parser.add_argument('--contrast_weight',
                     type=float,
-                    default=1.,
+                    default=1.0,
                     help='Weight for NCE contrast loss')
 parser.add_argument('--tgt_weight',
                     type=float,
-                    default=0.,
+                    default=0.0,
                     help='Weight for tgt classification loss')
 parser.add_argument('--threshold',
                     type=float,
-                    default=0.7,
+                    default=0.9,
                     help='Confidence threshold for pseudo labeling target samples')
 parser.add_argument('--alpha',
                     type=float,
-                    default=0.99,
+                    default=0.999,
                     help='momentum coefficient for model ema')
 parser.add_argument('--lr_decay',
                     type=float,
@@ -68,11 +68,15 @@ parser.add_argument('--lr_decay',
                     help='learning rate decay coefficient')
 parser.add_argument('--confident_classes',
                     type=int,
-                    default=18,
+                    default=10,
                     help='minimum number of confident classes')
+parser.add_argument('--confident_samples',
+                    type=int,
+                    default=4,
+                    help='minimum number of confident samples per class')
 parser.add_argument('--max_key_feature_size',
                     type=int,
-                    default=4096,
+                    default=16384,
                     help='maximum number of key feature size computed in the model')
 
 
@@ -84,6 +88,8 @@ def main():
     os.environ['CUDA_DEVICE_ORDER'] = 'PCI_BUS_ID'
     os.environ['CUDA_VISIBLE_DEVICES'] = args.gpu
 
+    assert args.confident_classes * args.confident_samples > args.batch_size
+
     # define model name
     setup_list = [
         args.src,
@@ -92,6 +98,7 @@ def main():
         f"contrast_weight_{args.contrast_weight}",
         f"threshold_{args.threshold}",
         f"confident_classes_{args.confident_classes}",
+        f"confident_samples_{args.confident_samples}",
         f"max_key_size_{args.max_key_feature_size}",
         f"lr_decay_{args.lr_decay}",
         f"alpha_{args.alpha}",
@@ -141,6 +148,7 @@ def main():
                     contrast_weight=args.contrast_weight,
                     threshold=args.threshold,
                     confident_classes=args.confident_classes,
+                    confident_samples=args.confident_samples,
                     max_key_feature_size=args.max_key_feature_size,
                     num_classes=dataset_config.num_classes,
                     lr_decay=args.lr_decay,

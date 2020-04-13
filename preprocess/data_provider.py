@@ -14,9 +14,10 @@ def get_data_loader(summary_file, data_loader_kwargs, training=True, is_center=F
     return DataLoader(dataset, **data_loader_kwargs)
 
 
-def get_certain_data_loader(summary_file, data_loader_kwargs, pseudo_labels, min_dataset_size=360, is_center=False):
+def get_certain_data_loader(summary_file, data_loader_kwargs, pseudo_labels, num_confident_samples=3, is_center=False):
     transformer = get_transformer(training=True, is_center=is_center)
-    dataset = CustomImageList(summary_file, pseudo_labels, min_dataset_size=min_dataset_size, transform=transformer)
+    dataset = CustomImageList(summary_file, pseudo_labels, num_confident_samples=num_confident_samples,
+                              transform=transformer)
     return DataLoader(dataset, **data_loader_kwargs)
 
 

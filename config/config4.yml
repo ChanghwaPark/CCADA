@@ -24,9 +24,9 @@ data:
 
     visda:
       network: resnet50 # resnet101
-      is_center: False
+      is_center: True # False
       num_classes: 12
-      bottleneck_dim: 1024 # 2048
+      bottleneck_dim: 2048
       iterations_per_epoch: 100
 
 optimizer:
@@ -51,5 +51,5 @@ log:
   num_embedding_samples: 384
 
 train:
-  max_iteration: 40000 # 100000
+  max_iteration: 10000
 
