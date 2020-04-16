@@ -74,7 +74,6 @@ class Model(nn.Module):
         end_points['predictions'] = predictions
 
         # outputs 'tensor'
-        # confidences = [F.softmax(el, dim=0)[i].item() for i, el in zip(predictions, logits)]
         confidences = torch.max(F.softmax(logits, dim=1), 1)[0]
         end_points['confidences'] = confidences
 

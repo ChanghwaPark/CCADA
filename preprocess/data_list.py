@@ -1,4 +1,3 @@
-import copy
 from random import shuffle
 
 import numpy as np
@@ -92,33 +91,38 @@ class CustomImageList(Dataset):
         pseudo_labels_list = pseudo_labels.cpu().tolist()
         assert len(images) == len(pseudo_labels_list)
 
-        confident_images = [(path, ori_index, pseudo_label) for ori_index, ((path, target), pseudo_label) in
-                            enumerate(zip(images, pseudo_labels_list)) if pseudo_label >= 0]
+        # confident_images = [(path, ori_index, pseudo_label) for ori_index, ((path, target), pseudo_label) in
+        #                     enumerate(zip(images, pseudo_labels_list)) if pseudo_label >= 0]
 
         confident_classes = list(set(pseudo_labels_list))
         if -1 in confident_classes:
             confident_classes.remove(-1)
-        temp_confident_classes = copy.deepcopy(confident_classes)
-        for confident_class in temp_confident_classes:
+        # temp_confident_classes = copy.deepcopy(confident_classes)
+        # for confident_class in temp_confident_classes:
+        for confident_class in confident_classes[:]:
             if pseudo_labels_list.count(confident_class) < num_confident_samples:
                 confident_classes.remove(confident_class)
         shuffle(confident_classes)
 
         sorted_confident_images = {}
-        min_class_len = len(confident_images)
+        # min_class_len = len(confident_images)
+        min_class_len = len(images)
         for confident_class in confident_classes:
-            sorted_confident_images[confident_class] = [(path, ori_index) for (path, ori_index, pseudo_label)
-                                                        in confident_images if pseudo_label == confident_class]
+            sorted_confident_images[confident_class] = \
+                [(path, ori_index) for ori_index, ((path, target), pseudo_label) in
+                 enumerate(zip(images, pseudo_labels_list)) if pseudo_label == confident_class]
             shuffle(sorted_confident_images[confident_class])
             if min_class_len > len(sorted_confident_images[confident_class]):
                 min_class_len = len(sorted_confident_images[confident_class])
-        temp_confident_images = copy.deepcopy(sorted_confident_images)
+        # temp_confident_images = copy.deepcopy(sorted_confident_images)
 
         rearranged_images = []
         for _ in range(min_class_len):
             for confident_class in confident_classes:
-                assert len(temp_confident_images[confident_class]) > 0
-                rearranged_images.append(temp_confident_images[confident_class].pop())
+                # assert len(temp_confident_images[confident_class]) > 0
+                assert len(sorted_confident_images[confident_class]) > 0
+                # rearranged_images.append(temp_confident_images[confident_class].pop())
+                rearranged_images.append(sorted_confident_images[confident_class].pop())
 
         self.rearranged_images = rearranged_images
         self.transform = transform
@@ -156,12 +160,14 @@ class UniformImageList(Dataset):
             if min_class_len > len(sorted_images[target_class]):
                 min_class_len = len(sorted_images[target_class])
 
-        temp_sorted_images = copy.deepcopy(sorted_images)
+        # temp_sorted_images = copy.deepcopy(sorted_images)
         rearranged_images = []
         for _ in range(min_class_len):
             for target_class in target_classes:
-                assert len(temp_sorted_images[target_class]) > 0
-                rearranged_images.append(temp_sorted_images[target_class].pop())
+                # assert len(temp_sorted_images[target_class]) > 0
+                assert len(sorted_images[target_class]) > 0
+                # rearranged_images.append(temp_sorted_images[target_class].pop())
+                rearranged_images.append(sorted_images[target_class].pop())
 
         self.images = rearranged_images
         self.transform = transform

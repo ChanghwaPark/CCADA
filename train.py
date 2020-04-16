@@ -1,4 +1,4 @@
-import random
+import copy
 
 import torch
 import tqdm
@@ -25,8 +25,8 @@ class Train:
                  is_center=False,
                  max_iter=100000,
                  iterations_per_epoch=10,
-                 print_interval=10,
-                 log_image_interval=100,
+                 print_interval=100,
+                 log_image_interval=1000,
                  num_embedding_samples=384,
                  alpha=0.99):
         self.model = model
@@ -97,8 +97,8 @@ class Train:
         self.tgt_size = len(open(tgt_file).readlines())
         self.src_all_labels = torch.tensor(get_labels_from_file(src_file)).cuda()
         self.tgt_all_pseudo_labels = torch.tensor([-1] * self.tgt_size).cuda()
-        self.src_updated_flag = torch.tensor([False] * self.src_size).cuda()
-        self.tgt_certain_indices = torch.tensor([]).cuda()
+        # self.src_updated_flag = torch.tensor([False] * self.src_size).cuda()
+        # self.tgt_certain_indices = torch.tensor([]).cuda()
         self.tgt_best_test_accuracy = 0.
         self.min_dataset_size = self.batch_size * self.iterations_per_epoch
 
@@ -107,14 +107,14 @@ class Train:
         self.total_progress_bar.write('Start training')
 
         while self.iteration < self.max_iter:
-            # evaluation and update pseudo labels update after each epoch
-            self.tgt_test()
-
             # update tgt_certain dataset
             self.prepare_tgt_certain_dataset()
 
             # train an epoch
             self.train_epoch()
+
+            # evaluation and update pseudo labels update after each epoch
+            self.tgt_test()
 
             # log to summary_writer
             self.log_summary_writer()
@@ -146,15 +146,17 @@ class Train:
         self.optimizer.zero_grad()
 
         # prepare source and target batches
-        src_inputs, src_labels, src_indices = self.get_sample('src_train')
+        src_inputs, src_labels, _ = self.get_sample('src_train')
 
         if self.data_loader['tgt_certain'] is not None:
             tgt_inputs, tgt_indices = self.get_sample('tgt_certain')
         else:
             tgt_inputs, _, tgt_indices = self.get_sample('tgt_train')
 
-        src_inputs, src_labels, src_indices, tgt_inputs, tgt_indices \
-            = src_inputs.cuda(), src_labels.cuda(), src_indices.cuda(), tgt_inputs.cuda(), tgt_indices.cuda()
+        # src_inputs, src_labels, src_indices, tgt_inputs, tgt_indices \
+        #     = src_inputs.cuda(), src_labels.cuda(), src_indices.cuda(), tgt_inputs.cuda(), tgt_indices.cuda()
+        src_inputs, src_labels, tgt_inputs, tgt_indices \
+            = src_inputs.cuda(), src_labels.cuda(), tgt_inputs.cuda(), tgt_indices.cuda()
 
         # tgt pseudo labels
         tgt_pseudo_labels = torch.gather(self.tgt_all_pseudo_labels, dim=0, index=tgt_indices)
@@ -169,20 +171,25 @@ class Train:
         with torch.no_grad():
             self.model_ema.set_bn_domain(domain=0)
             src_end_points_ema = self.model_ema(src_inputs)
-            self.src_memory.store_keys(src_end_points_ema['features'], src_indices)
+            # self.src_memory.store_keys(src_end_points_ema['features'], src_indices)
+            self.src_memory.store_keys(src_end_points_ema['features'], src_labels)
 
             self.model_ema.set_bn_domain(domain=1)
             tgt_end_points_ema = self.model_ema(tgt_inputs)
-            self.tgt_memory.store_keys(tgt_end_points_ema['features'], tgt_indices)
+            # self.tgt_memory.store_keys(tgt_end_points_ema['features'], tgt_indices)
+            self.tgt_memory.store_keys(tgt_end_points_ema['features'], tgt_pseudo_labels)
 
-        self.src_updated_flag[src_indices] = True
+        # self.src_updated_flag[src_indices] = True
 
         # source classification
         self.src_supervised_step(src_end_points, src_labels)
 
         if self.data_loader['tgt_certain'] is not None:
-            # target pseudo classification
-            self.tgt_supervised_step(tgt_end_points, tgt_pseudo_labels)
+            if self.tgt_weight > 0:
+                # target pseudo classification
+                self.tgt_supervised_step(tgt_end_points, tgt_pseudo_labels)
+            else:
+                self.losses_dict['tgt_classification_loss'] = 0.
 
             # class contrastive alignment
             self.contrastive_step(src_end_points, src_labels, tgt_end_points, tgt_pseudo_labels)
@@ -222,25 +229,25 @@ class Train:
         batch_labels = torch.cat([src_labels, tgt_pseudo_labels], dim=0)
         assert batch_labels.lt(0).sum().cpu().numpy() == 0
 
-        src_updated_indices = torch.tensor(range(self.src_size)).cuda()[self.src_updated_flag]
-        if self.max_key_feature_size < len(src_updated_indices):
-            src_selected_indices = torch.tensor(
-                random.sample(src_updated_indices.tolist(), self.max_key_feature_size)).cuda()
-        else:
-            src_selected_indices = src_updated_indices
-        src_key_features = self.src_memory.get_queue(src_selected_indices)
+        # src_updated_indices = torch.tensor(range(self.src_size)).cuda()[self.src_updated_flag]
+        # if self.max_key_feature_size < len(src_updated_indices):
+        #     src_selected_indices = torch.tensor(
+        #         random.sample(src_updated_indices.tolist(), self.max_key_feature_size)).cuda()
+        # else:
+        #     src_selected_indices = src_updated_indices
+        src_key_features, src_key_labels = self.src_memory.get_queue()
 
-        if self.max_key_feature_size < len(self.tgt_certain_indices):
-            tgt_selected_indices = torch.tensor(
-                random.sample(self.tgt_certain_indices.tolist(), self.max_key_feature_size)).cuda()
-        else:
-            tgt_selected_indices = self.tgt_certain_indices
-        tgt_key_features = self.tgt_memory.get_queue(tgt_selected_indices)
+        # if self.max_key_feature_size < len(self.tgt_certain_indices):
+        #     tgt_selected_indices = torch.tensor(
+        #         random.sample(self.tgt_certain_indices.tolist(), self.max_key_feature_size)).cuda()
+        # else:
+        #     tgt_selected_indices = self.tgt_certain_indices
+        tgt_key_features, tgt_key_labels = self.tgt_memory.get_queue()
 
         key_features = torch.cat([src_key_features, tgt_key_features], dim=0)
 
-        src_key_labels = torch.index_select(self.src_all_labels, dim=0, index=src_selected_indices)
-        tgt_key_labels = torch.index_select(self.tgt_all_pseudo_labels, dim=0, index=tgt_selected_indices)
+        # src_key_labels = torch.index_select(self.src_all_labels, dim=0, index=src_selected_indices)
+        # tgt_key_labels = torch.index_select(self.tgt_all_pseudo_labels, dim=0, index=tgt_selected_indices)
 
         key_labels = torch.cat([src_key_labels, tgt_key_labels], dim=0)
 
@@ -270,7 +277,7 @@ class Train:
                     self.data_loader['tgt_test'], desc='Evaluation', leave=False, ascii=True):
                 tgt_inputs, tgt_labels, tgt_indices = tgt_inputs.cuda(), tgt_labels.cuda(), tgt_indices.cuda()
                 tgt_end_points = self.model_ema(tgt_inputs)
-                self.tgt_memory.store_keys(tgt_end_points['features'], tgt_indices)  # TODO
+                # self.tgt_memory.store_keys(tgt_end_points['features'], tgt_indices)  # TODO
 
                 correct += (tgt_end_points['predictions'] == tgt_labels).sum().item()
 
@@ -286,16 +293,19 @@ class Train:
             tgt_all_uncertain_labels = torch.tensor([-1] * self.tgt_size).cuda()
             self.tgt_all_pseudo_labels = torch.where(
                 tgt_all_confident_mask, tgt_all_predictions, tgt_all_uncertain_labels)
-            tgt_certain_indices_list = [index for (index, pseudo_label) in enumerate(self.tgt_all_pseudo_labels)
-                                        if pseudo_label >= 0]
-            self.tgt_certain_indices = torch.tensor(tgt_certain_indices_list).cuda()
+            # tgt_certain_indices_list = [index for (index, pseudo_label) in enumerate(self.tgt_all_pseudo_labels)
+            #                             if pseudo_label >= 0]
+            # self.tgt_certain_indices = torch.tensor(tgt_certain_indices_list).cuda()
 
     def prepare_tgt_certain_dataset(self):
         tgt_all_pseudo_labels_list = self.tgt_all_pseudo_labels.tolist()
         confident_classes = list(set(tgt_all_pseudo_labels_list))
         if -1 in confident_classes:
             confident_classes.remove(-1)
-        for confident_class in confident_classes:
+        # temp_confident_classes = copy.deepcopy(confident_classes)
+        # for confident_class in confident_classes:
+        # for confident_class in temp_confident_classes:
+        for confident_class in confident_classes[:]:
             if tgt_all_pseudo_labels_list.count(confident_class) < self.num_confident_samples:
                 confident_classes.remove(confident_class)
 

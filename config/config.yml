@@ -6,28 +6,28 @@ data:
       is_center: False
       num_classes: 31
       bottleneck_dim: 1024
-      iterations_per_epoch: 10
+      #iterations_per_epoch: 10
 
     office-home:
       network: resnet50 #ResNet50
       is_center: False  # True
       num_classes: 65
       bottleneck_dim: 2048
-      iterations_per_epoch: 50
+      #iterations_per_epoch: 50
 
     image-clef:
       network: resnet50
       is_center: False
       num_classes: 12
       bottleneck_dim: 1024
-      iterations_per_epoch: 10
+      #iterations_per_epoch: 10
 
     visda:
       network: resnet50 # resnet101
       is_center: False
       num_classes: 12
-      bottleneck_dim: 1024 # 2048
-      iterations_per_epoch: 100
+      bottleneck_dim: 1024 # 2048 # TODO
+      #iterations_per_epoch: 100
 
 optimizer:
   init_lr: 0.001 # 0.004
