@@ -1,7 +1,7 @@
 from torch.utils.data import DataLoader
 from torchvision import transforms
 
-from .data_list import ImageList, CustomImageList, UniformImageList
+from .data_list import ImageList, ConfidentImageList, UniformImageList
 
 _RESIZE_SIZE = 256
 _CROP_SIZE = 224
@@ -14,11 +14,22 @@ def get_data_loader(summary_file, data_loader_kwargs, training=True, is_center=F
     return DataLoader(dataset, **data_loader_kwargs)
 
 
-def get_certain_data_loader(summary_file, data_loader_kwargs, pseudo_labels, num_confident_samples=3, is_center=False):
+def get_conf_data_loader(summary_file, data_loader_kwargs, conf_pair, min_conf_classes, is_center=False):
     transformer = get_transformer(training=True, is_center=is_center)
-    dataset = CustomImageList(summary_file, pseudo_labels, num_confident_samples=num_confident_samples,
-                              transform=transformer)
-    return DataLoader(dataset, **data_loader_kwargs)
+    dataset = ConfidentImageList(summary_file, conf_pair, min_conf_classes, transform=transformer)
+    if dataset.conf_images is None:
+        return None
+    elif len(dataset.conf_images) < data_loader_kwargs['batch_size']:
+        return None
+    else:
+        return DataLoader(dataset, **data_loader_kwargs)
+
+
+# def get_certain_data_loader(summary_file, data_loader_kwargs, pseudo_labels, num_confident_samples=3, is_center=False):
+#     transformer = get_transformer(training=True, is_center=is_center)
+#     dataset = CustomImageList(summary_file, pseudo_labels, num_confident_samples=num_confident_samples,
+#                               transform=transformer)
+#     return DataLoader(dataset, **data_loader_kwargs)
 
 
 def get_uniform_data_loader(summary_file, data_loader_kwargs, is_center=False):

@@ -14,7 +14,7 @@ from train import Train
 from utils import configure, get_dataset_name, moment_update
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--config_file',
+parser.add_argument('--config',
                     type=str,
                     default='config/config.yml',
                     help='Dataset configuration parameters')
@@ -46,15 +46,15 @@ parser.add_argument('--tclip',
                     type=float,
                     default=10.,
                     help='Soft clipping range for NCE scores')
-parser.add_argument('--contrast_weight',
+parser.add_argument('--tw',
+                    type=float,
+                    default=0.0,
+                    help='Weight for target classification loss')
+parser.add_argument('--cw',
                     type=float,
                     default=1.0,
                     help='Weight for NCE contrast loss')
-parser.add_argument('--tgt_weight',
-                    type=float,
-                    default=0.0,
-                    help='Weight for tgt classification loss')
-parser.add_argument('--threshold',
+parser.add_argument('--thresh',
                     type=float,
                     default=0.9,
                     help='Confidence threshold for pseudo labeling target samples')
@@ -66,40 +66,34 @@ parser.add_argument('--lr_decay',
                     type=float,
                     default=10.,
                     help='learning rate decay coefficient')
-parser.add_argument('--confident_classes',
+parser.add_argument('--min_conf_classes',
                     type=int,
                     default=10,
                     help='minimum number of confident classes')
-parser.add_argument('--confident_samples',
-                    type=int,
-                    default=4,
-                    help='minimum number of confident samples per class')
-parser.add_argument('--max_key_feature_size',
+parser.add_argument('--max_key_size',
                     type=int,
                     default=16384,
                     help='maximum number of key feature size computed in the model')
+parser.add_argument('--')
 
 
 def main():
     args = parser.parse_args()
     print(args)
-    config = configure(args.config_file)
+    config = configure(args.config)
 
     os.environ['CUDA_DEVICE_ORDER'] = 'PCI_BUS_ID'
     os.environ['CUDA_VISIBLE_DEVICES'] = args.gpu
-
-    assert args.confident_classes * args.confident_samples > args.batch_size
 
     # define model name
     setup_list = [
         args.src,
         args.tgt,
-        f"tgt_weight_{args.tgt_weight}",
-        f"contrast_weight_{args.contrast_weight}",
-        f"threshold_{args.threshold}",
-        f"confident_classes_{args.confident_classes}",
-        f"confident_samples_{args.confident_samples}",
-        f"max_key_size_{args.max_key_feature_size}",
+        f"tw_{args.tw}",
+        f"cw_{args.cw}",
+        f"thresh_{args.thresh}",
+        f"min_conf_classes_{args.min_conf_classes}",
+        f"max_key_size_{args.max_key_size}",
         f"lr_decay_{args.lr_decay}",
         f"alpha_{args.alpha}",
         f"gpu_{args.gpu}"
@@ -144,12 +138,11 @@ def main():
 
     trainer = Train(model, model_ema, optimizer, lr_scheduler, group_ratios,
                     summary_writer, src_file, tgt_file, contrast_loss, src_memory, tgt_memory,
-                    tgt_weight=args.tgt_weight,
-                    contrast_weight=args.contrast_weight,
-                    threshold=args.threshold,
-                    confident_classes=args.confident_classes,
-                    confident_samples=args.confident_samples,
-                    max_key_feature_size=args.max_key_feature_size,
+                    tw=args.tw,
+                    cw=args.cw,
+                    thresh=args.thresh,
+                    min_conf_classes=args.min_conf_classes,
+                    max_key_size=args.max_key_size,
                     num_classes=dataset_config.num_classes,
                     lr_decay=args.lr_decay,
                     batch_size=args.batch_size,
@@ -157,15 +150,16 @@ def main():
                     num_workers=args.num_workers,
                     is_center=dataset_config.is_center,
                     max_iter=config.train.max_iteration,
-                    iterations_per_epoch=dataset_config.iterations_per_epoch,
-                    print_interval=config.log.print_interval,
+                    iters_per_epoch=dataset_config.iterations_per_epoch,
+                    log_summary_interval=config.log.log_summary_interval,
                     log_image_interval=config.log.log_image_interval,
-                    num_embedding_samples=config.log.num_embedding_samples,
+                    eval_interval=config.log.eval_interval,
+                    num_proj_samples=config.log.num_proj_samples,
                     alpha=args.alpha)
 
-    tgt_best_accuracy = trainer.train()
+    tgt_best_acc = trainer.train()
     with open('results.txt', 'a') as f:
-        f.write(model_name + '     ' + str(tgt_best_accuracy) + '\n')
+        f.write(model_name + '     ' + str(tgt_best_acc) + '\n')
         f.close()
 
 

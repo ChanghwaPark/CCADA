@@ -28,7 +28,7 @@ def configure(filename):
     return parser
 
 
-def summary_write_figures(summary_writer, tag, global_step, model, images, labels, domain):
+def summary_write_fig(summary_writer, tag, global_step, model, images, labels, domain):
     model.set_bn_domain(domain=domain)
     model.eval()
 
@@ -70,8 +70,8 @@ def matplotlib_imshow(image):
     plt.imshow(np_image)
 
 
-def summary_write_embeddings(summary_writer, tag, global_step, model, src_train_loader, tgt_train_loader,
-                             num_samples=128):
+def summary_write_proj(summary_writer, tag, global_step, model, src_train_loader, tgt_train_loader,
+                       num_samples=128):
     total_iteration = num_samples // src_train_loader.batch_size
     model.eval()
     with torch.no_grad():
@@ -152,7 +152,7 @@ def get_dataset_name(src_name, tgt_name):
     return dataset_names[src_name]
 
 
-class AverageMeter:
+class AvgMeter:
     def __init__(self, maxsize=10):
         self.maxsize = maxsize
         self.queue = queue.Queue(maxsize=maxsize)
@@ -185,3 +185,9 @@ def get_labels_from_file(file_name):
     image_list = open(file_name).readlines()
     labels = [int(val.split()[1]) for val in image_list]
     return labels
+
+
+def set_bn_train(m):
+    classname = m.__class__.__name__
+    if classname.find('BatchNorm') != -1:
+        m.train()

@@ -26,7 +26,7 @@ data:
       network: resnet50 # resnet101
       is_center: False
       num_classes: 12
-      bottleneck_dim: 1024 # 2048 # TODO
+      bottleneck_dim: 1024 # TODO
       iterations_per_epoch: 100
 
 optimizer:
@@ -46,9 +46,10 @@ optimizer:
 
 log:
   log_dir: 'logs'
-  print_interval: 100
+  log_summary_interval: 10
   log_image_interval: 1000
-  num_embedding_samples: 384
+  eval_interval: 1000
+  num_proj_samples: 384
 
 train:
   max_iteration: 40000 # 100000
