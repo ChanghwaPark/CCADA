@@ -20,17 +20,15 @@ class KeyMemory(nn.Module):
         batch_size = batch_features.size(0)
         batch_features.detach()
         batch_labels.detach()
-        # batch_indices.detach()
 
         # update memory
         with torch.no_grad():
-            new_indices = torch.arange(batch_size).cuda()
-            new_indices += self.index
-            new_indices = torch.fmod(new_indices, self.queue_size)
-            new_indices = new_indices.long()
-            # self.features.index_copy_(0, batch_indices, batch_features)
-            self.features.index_copy_(0, new_indices, batch_features)
-            self.labels.index_copy_(0, new_indices, batch_labels)
+            store_indices = torch.arange(batch_size).cuda()
+            store_indices += self.index
+            store_indices = torch.fmod(store_indices, self.queue_size)
+            store_indices = store_indices.long()
+            self.features.index_copy_(0, store_indices, batch_features)
+            self.labels.index_copy_(0, store_indices, batch_labels)
             self.index = (self.index + batch_size) % self.queue_size
 
     def get_queue(self):
@@ -41,9 +39,6 @@ class KeyMemory(nn.Module):
 
         certain_features = features[certain_flag]
         certain_labels = labels[certain_flag]
-        # print(certain_features.shape)
-        # print(certain_labels.shape)
-        # selected_features = torch.index_select(features, dim=0, index=selected_indices)
         return certain_features, certain_labels
 
     def get_size(self):

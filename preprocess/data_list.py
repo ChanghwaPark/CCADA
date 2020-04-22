@@ -1,5 +1,10 @@
+###############################################################################
+# Code from
+# https://github.com/pytorch/vision/blob/master/torchvision/datasets/folder.py
+###############################################################################
 import random
 
+import cv2
 import numpy as np
 from PIL import Image
 from torch.utils.data import Dataset
@@ -25,6 +30,13 @@ def pil_loader(path):
             return img.convert('RGB')
 
 
+def cv_loader(path):
+    img = cv2.imread(path)
+    # By default OpenCV uses BGR color space for color images,
+    # so we need to convert the image to RGB color space.
+    return cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+
+
 # def accimage_loader(path):
 #     import accimage
 #     try:
@@ -39,7 +51,8 @@ def default_loader(path):
     # if get_image_backend() == 'accimage':
     #    return accimage_loader(path)
     # else:
-    return pil_loader(path)
+    # return pil_loader(path)
+    return cv_loader(path)
 
 
 def get_classes_set(images):
@@ -50,7 +63,7 @@ def get_classes_set(images):
     """
     targets = [target for (_, target) in images]
     target_classes = list(set(targets))
-    random.shuffle(target_classes)
+    # random.shuffle(target_classes)
     return target_classes
 
 
@@ -127,11 +140,13 @@ class ImageList(Dataset):
         path, target = self.images[index]
         img = self.loader(path)
         if self.transform is not None:
-            img = self.transform(img)
+            # img = self.transform(img)
+            img = self.transform(image=img)
         if self.target_transform is not None:
             target = self.target_transform(target)
 
-        return img, target, index
+        # return img, target, index
+        return img['image'], target, index
 
     def __len__(self):
         return len(self.images)
@@ -167,9 +182,11 @@ class ConfidentImageList(Dataset):
         img = self.loader(path)
 
         if self.transform is not None:
-            img = self.transform(img)
+            # img = self.transform(img)
+            img = self.transform(image=img)
 
-        return img, pseudo_label
+        # return img, pseudo_label
+        return img['image'], pseudo_label
 
     def __len__(self):
         return len(self.conf_images)
@@ -251,9 +268,11 @@ class UniformImageList(Dataset):
         img = self.loader(path)
 
         if self.transform is not None:
-            img = self.transform(img)
+            # img = self.transform(img)
+            img = self.transform(image=img)
 
-        return img, target
+        # return img, target
+        return img['image'], target
 
     def __len__(self):
         return len(self.uniform_images)

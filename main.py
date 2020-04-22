@@ -68,13 +68,12 @@ parser.add_argument('--lr_decay',
                     help='learning rate decay coefficient')
 parser.add_argument('--min_conf_classes',
                     type=int,
-                    default=10,
+                    default=8,
                     help='minimum number of confident classes')
 parser.add_argument('--max_key_size',
                     type=int,
                     default=16384,
                     help='maximum number of key feature size computed in the model')
-parser.add_argument('--')
 
 
 def main():

@@ -70,11 +70,13 @@ class Model(nn.Module):
         end_points['logits'] = logits
 
         # outputs 'tensor'
-        predictions = torch.max(logits, 1)[1]
-        end_points['predictions'] = predictions
+        # predictions = torch.max(logits, 1)[1]
+        # end_points['predictions'] = predictions
 
         # outputs 'tensor'
-        confidences = torch.max(F.softmax(logits, dim=1), 1)[0]
+        # confidences = torch.max(F.softmax(logits, dim=1), 1)[0]
+        confidences, predictions = torch.max(F.softmax(logits, dim=1), 1)
+        end_points['predictions'] = predictions
         end_points['confidences'] = confidences
 
         return end_points
