@@ -40,7 +40,7 @@ parser.add_argument('--gpu',
                     help='Selected gpu index')
 parser.add_argument('--num_workers',
                     type=int,
-                    default=4,
+                    default=8,
                     help='Number of workers')
 parser.add_argument('--tclip',
                     type=float,
@@ -147,7 +147,6 @@ def main():
                     batch_size=args.batch_size,
                     eval_batch_size=args.eval_batch_size,
                     num_workers=args.num_workers,
-                    is_center=dataset_config.is_center,
                     max_iter=config.train.max_iteration,
                     iters_per_epoch=dataset_config.iterations_per_epoch,
                     log_summary_interval=config.log.log_summary_interval,

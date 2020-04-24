@@ -72,16 +72,16 @@ def matplotlib_imshow(image):
 
 def summary_write_proj(summary_writer, tag, global_step, model, src_train_loader, tgt_train_loader,
                        num_samples=128):
-    total_iteration = num_samples // src_train_loader.batch_size
+    total_iteration = num_samples // src_train_loader.data_loader.batch_size
     model.eval()
     with torch.no_grad():
         features_list = []
         class_labels_list = []
         domain_labels_list = []
 
-        for ((src_inputs, src_labels, _), (tgt_inputs, tgt_labels, _)) in zip(src_train_loader, tgt_train_loader):
-            src_inputs, tgt_inputs, src_labels, tgt_labels = \
-                src_inputs.cuda(), tgt_inputs.cuda(), src_labels.cuda(), tgt_labels.cuda()
+        for (src_data, tgt_data) in zip(src_train_loader, tgt_train_loader):
+            src_inputs, src_labels = src_data['image'].cuda(), src_data['true_label'].cuda()
+            tgt_inputs, tgt_labels = tgt_data['image'].cuda(), tgt_data['true_label'].cuda()
             model.set_bn_domain(domain=0)
             src_end_points = model(src_inputs)
             model.set_bn_domain(domain=1)
@@ -133,7 +133,6 @@ class ImageTransform(Dataset):
 
 
 def get_dataset_name(src_name, tgt_name):
-    # only office dataset is implemented. other datasets should be added later
     dataset_names = {
         'amazon': 'office',
         'dslr': 'office',
