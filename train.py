@@ -173,10 +173,10 @@ class Train:
 
         else:
             self.losses_dict['tgt_classification_loss'] = 0.
-            # self.losses_dict['query_to_key_loss'] = 0.
-            # self.losses_dict['contrast_norm_loss'] = 0.
-            # self.losses_dict['contrast_loss'] = 0.
-            self.contrastive_step(src_end_points, src_labels)
+            self.losses_dict['query_to_key_loss'] = 0.
+            self.losses_dict['contrast_norm_loss'] = 0.
+            self.losses_dict['contrast_loss'] = 0.
+            # self.contrastive_step(src_end_points, src_labels)
 
         self.losses_dict['total_loss'] = \
             self.losses_dict['src_classification_loss'] \
