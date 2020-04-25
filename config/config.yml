@@ -2,32 +2,32 @@ data:
   dataset_root: '/home/omega/datasets'
   dataset:
     office:
-      network: resnet50 #ResNet50
-      #      is_center: False
+      network: resnet50
       num_classes: 31
-      bottleneck_dim: 1024
+      #      bottleneck_dim: 1024
       iterations_per_epoch: 10
+      acc_metric: total_mean
 
     office-home:
-      network: resnet50 #ResNet50
-      #      is_center: False  # True
+      network: resnet50
       num_classes: 65
-      bottleneck_dim: 2048
+      #      bottleneck_dim: 2048
       iterations_per_epoch: 50
+      acc_metric: total_mean
 
     image-clef:
       network: resnet50
-      #      is_center: False
       num_classes: 12
-      bottleneck_dim: 1024
+      #      bottleneck_dim: 1024
       iterations_per_epoch: 10
+      acc_metric: total_mean
 
     visda:
-      network: resnet50 # resnet101
-      #      is_center: False
+      network: resnet50
       num_classes: 12
-      bottleneck_dim: 1024 # TODO
+      #      bottleneck_dim: 1024 # TODO
       iterations_per_epoch: 100
+      acc_metric: class_mean
 
 optimizer:
   init_lr: 0.001 # 0.004

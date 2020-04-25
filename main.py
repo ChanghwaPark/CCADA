@@ -40,7 +40,7 @@ parser.add_argument('--gpu',
                     help='Selected gpu index')
 parser.add_argument('--num_workers',
                     type=int,
-                    default=8,
+                    default=4,
                     help='Number of workers')
 parser.add_argument('--tclip',
                     type=float,
@@ -60,7 +60,7 @@ parser.add_argument('--thresh',
                     help='Confidence threshold for pseudo labeling target samples')
 parser.add_argument('--alpha',
                     type=float,
-                    default=0.999,
+                    default=0.9,
                     help='momentum coefficient for model ema')
 parser.add_argument('--lr_decay',
                     type=float,
@@ -74,6 +74,10 @@ parser.add_argument('--max_key_size',
                     type=int,
                     default=16384,
                     help='maximum number of key feature size computed in the model')
+parser.add_argument('--bottleneck_dim',
+                    type=int,
+                    default=1024,
+                    help='bottleneck layer dimension')
 
 
 def main():
@@ -95,6 +99,7 @@ def main():
         f"max_key_size_{args.max_key_size}",
         f"lr_decay_{args.lr_decay}",
         f"alpha_{args.alpha}",
+        f"bottleneck_dim_{args.bottleneck_dim}",
         f"gpu_{args.gpu}"
     ]
     model_name = "_".join(setup_list)
@@ -113,10 +118,10 @@ def main():
 
     model = Model(base_net=dataset_config.network,
                   num_classes=dataset_config.num_classes,
-                  bottleneck_dim=dataset_config.bottleneck_dim)
+                  bottleneck_dim=args.bottleneck_dim)
     model_ema = Model(base_net=dataset_config.network,
                       num_classes=dataset_config.num_classes,
-                      bottleneck_dim=dataset_config.bottleneck_dim)
+                      bottleneck_dim=args.bottleneck_dim)
 
     moment_update(model, model_ema, 0)
 
@@ -124,8 +129,8 @@ def main():
     model_ema = model_ema.cuda()
 
     contrast_loss = LossMultiNCE(tclip=args.tclip).cuda()
-    src_memory = KeyMemory(len(open(src_file).readlines()), dataset_config.bottleneck_dim).cuda()
-    tgt_memory = KeyMemory(len(open(tgt_file).readlines()), dataset_config.bottleneck_dim).cuda()
+    src_memory = KeyMemory(len(open(src_file).readlines()), args.bottleneck_dim).cuda()
+    tgt_memory = KeyMemory(len(open(tgt_file).readlines()), args.bottleneck_dim).cuda()
 
     parameters = model.get_parameter_list()
     group_ratios = [parameter['lr'] for parameter in parameters]
@@ -153,6 +158,7 @@ def main():
                     log_image_interval=config.log.log_image_interval,
                     eval_interval=config.log.eval_interval,
                     num_proj_samples=config.log.num_proj_samples,
+                    acc_metric=dataset_config.acc_metric,
                     alpha=args.alpha)
 
     tgt_best_acc = trainer.train()

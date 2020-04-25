@@ -190,3 +190,29 @@ def set_bn_train(m):
     classname = m.__class__.__name__
     if classname.find('BatchNorm') != -1:
         m.train()
+
+
+def compute_accuracy(logits, true_labels, acc_metric='total_mean', print_result=False):
+    assert logits.size(0) == true_labels.size(0)
+    if acc_metric == 'total_mean':
+        predictions = torch.max(logits, dim=1)[1]
+        return 100.0 * (predictions == true_labels).sum().item() / logits.size(0)
+    elif acc_metric == 'class_mean':
+        num_classes = logits.size(1)
+        predictions = torch.max(logits, dim=1)[1]
+        class_accuracies = []
+        for class_label in range(num_classes):
+            class_mask = (true_labels == class_label)
+
+            class_count = class_mask.sum().item()
+            if class_count == 0:
+                class_accuracies += [0.0]
+                continue
+
+            class_accuracy = 100.0 * (predictions[class_mask] == class_label).sum().item() / class_count
+            class_accuracies += [class_accuracy]
+        if print_result:
+            print(f'class_accuracies: {class_accuracies}')
+        return np.mean(class_accuracies)
+    else:
+        raise ValueError(f'acc_metric, {acc_metric} is not available.')

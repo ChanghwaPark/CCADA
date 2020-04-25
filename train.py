@@ -3,7 +3,7 @@ import tqdm
 from torch import nn
 
 from preprocess.data_provider import DefaultDataLoader, UniformDataLoader, ConfidentDataLoader
-from utils import summary_write_proj, summary_write_fig, AvgMeter, moment_update, set_bn_train
+from utils import summary_write_proj, summary_write_fig, AvgMeter, moment_update, set_bn_train, compute_accuracy
 
 
 class Train:
@@ -25,6 +25,7 @@ class Train:
                  log_image_interval=1000,
                  eval_interval=1000,
                  num_proj_samples=384,
+                 acc_metric='total_mean',
                  alpha=0.99):
         self.model = model
         self.model_ema = model_ema
@@ -53,6 +54,7 @@ class Train:
         self.log_image_interval = log_image_interval
         self.eval_interval = eval_interval
         self.num_proj_samples = num_proj_samples
+        self.acc_metric = acc_metric
         self.alpha = alpha
 
         self.iteration = 0
@@ -195,7 +197,7 @@ class Train:
         self.losses_dict['src_classification_loss'] = src_classification_loss
 
         # compute source train accuracy
-        src_train_accuracy = (src_end_points['predictions'] == src_labels).sum().item() / src_labels.size(0)
+        src_train_accuracy = compute_accuracy(src_end_points['logits'], src_labels, acc_metric=self.acc_metric)
         self.src_train_acc_queue.put(src_train_accuracy)
 
     def tgt_supervised_step(self, tgt_end_points, tgt_pseudo_labels):
@@ -245,7 +247,8 @@ class Train:
         self.model_ema.eval()
         with torch.no_grad():
             self.model_ema.set_bn_domain(domain=1)
-            correct = 0
+            tgt_logits = []
+            tgt_true_labels = []
             tgt_conf_indices = []
             tgt_conf_predictions = []
 
@@ -255,17 +258,24 @@ class Train:
                     = tgt_data['image'].cuda(), tgt_data['true_label'].cuda(), tgt_data['index'].cuda()
                 tgt_end_points = self.model_ema(tgt_inputs)
 
-                correct += (tgt_end_points['predictions'] == tgt_labels).sum().item()
+                tgt_logits += [tgt_end_points['logits']]
+                tgt_true_labels += [tgt_labels]
 
                 tgt_conf_mask = tgt_end_points['confidences'].ge(self.thresh)
-                tgt_conf_indices.extend(tgt_indices[tgt_conf_mask].tolist())
-                tgt_conf_predictions.extend(tgt_end_points['predictions'][tgt_conf_mask].tolist())
+                tgt_conf_indices += [tgt_indices[tgt_conf_mask]]
+                tgt_conf_predictions += [tgt_end_points['predictions'][tgt_conf_mask]]
+
+            tgt_logits = torch.cat(tgt_logits, dim=0)
+            tgt_true_labels = torch.cat(tgt_true_labels, dim=0)
+            tgt_conf_indices = torch.cat(tgt_conf_indices, dim=0).tolist()
+            tgt_conf_predictions = torch.cat(tgt_conf_predictions, dim=0).tolist()
 
         print('tgt_conf_indices, tgt_conf_predictions')
         assert len(tgt_conf_indices) == len(tgt_conf_predictions)
         print(f'len(tgt_conf_indices): {len(tgt_conf_indices)}')
 
-        tgt_test_acc = round(correct / len(self.data_loader['tgt_test'].dataset), 5)
+        tgt_test_acc = compute_accuracy(tgt_logits, tgt_true_labels, acc_metric=self.acc_metric, print_result=True)
+        tgt_test_acc = round(tgt_test_acc, 3)
         self.acc_dict['tgt_test_acc'] = tgt_test_acc
         self.acc_dict['tgt_best_test_acc'] = max(self.acc_dict['tgt_best_test_acc'], tgt_test_acc)
 
