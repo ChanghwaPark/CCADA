@@ -10,6 +10,7 @@ from lr_schedule import InvScheduler
 from model.costs import LossMultiNCE
 from model.key_memory import KeyMemory
 from model.model import Model
+from pseudo_labeler import TargetPseudoLabeler
 from train import Train
 from utils import configure, get_dataset_name, moment_update
 
@@ -78,6 +79,14 @@ parser.add_argument('--bottleneck_dim',
                     type=int,
                     default=1024,
                     help='bottleneck layer dimension')
+parser.add_argument('--lp_size',
+                    type=int,
+                    default=4096,
+                    help='number of samples for label propagation')
+parser.add_argument('--lp_iterations',
+                    type=int,
+                    default=10000,
+                    help='number of iterations for label propagation')
 
 
 def main():
@@ -129,6 +138,8 @@ def main():
     model_ema = model_ema.cuda()
 
     contrast_loss = LossMultiNCE(tclip=args.tclip).cuda()
+    tgt_pseudo_labeler = TargetPseudoLabeler(num_classes=dataset_config.num_classes,
+                                             tclip=args.tclip, lp_size=args.lp_size, lp_iterations=args.lp_iterations)
     src_memory = KeyMemory(len(open(src_file).readlines()), args.bottleneck_dim).cuda()
     tgt_memory = KeyMemory(len(open(tgt_file).readlines()), args.bottleneck_dim).cuda()
 
@@ -141,7 +152,7 @@ def main():
                                 init_lr=config.optimizer.init_lr)
 
     trainer = Train(model, model_ema, optimizer, lr_scheduler, group_ratios,
-                    summary_writer, src_file, tgt_file, contrast_loss, src_memory, tgt_memory,
+                    summary_writer, src_file, tgt_file, contrast_loss, src_memory, tgt_memory, tgt_pseudo_labeler,
                     tw=args.tw,
                     cw=args.cw,
                     thresh=args.thresh,

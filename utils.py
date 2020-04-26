@@ -213,6 +213,7 @@ def compute_accuracy(logits, true_labels, acc_metric='total_mean', print_result=
             class_accuracies += [class_accuracy]
         if print_result:
             print(f'class_accuracies: {class_accuracies}')
+            print(f'class_mean_accuracies: {np.mean(class_accuracies)}')
         return np.mean(class_accuracies)
     else:
         raise ValueError(f'acc_metric, {acc_metric} is not available.')

@@ -8,7 +8,7 @@ from utils import summary_write_proj, summary_write_fig, AvgMeter, moment_update
 
 class Train:
     def __init__(self, model, model_ema, optimizer, lr_scheduler, group_ratios,
-                 summary_writer, src_file, tgt_file, contrast_loss, src_memory, tgt_memory,
+                 summary_writer, src_file, tgt_file, contrast_loss, src_memory, tgt_memory, tgt_pseudo_labeler,
                  tw=0.0,
                  cw=1.0,
                  thresh=0.9,
@@ -39,6 +39,7 @@ class Train:
         self.max_key_size = max_key_size
         self.src_memory = src_memory
         self.tgt_memory = tgt_memory
+        self.tgt_pseudo_labeler = tgt_pseudo_labeler
         self.tw = tw
         self.cw = cw
         self.thresh = thresh
@@ -90,6 +91,7 @@ class Train:
         self.data_loader['src_embed'] = DefaultDataLoader(self.src_file, self.train_data_loader_kwargs, training=False)
         self.data_loader['tgt_embed'] = DefaultDataLoader(self.tgt_file, self.train_data_loader_kwargs, training=False)
 
+        self.data_loader['src_test'] = DefaultDataLoader(self.src_file, self.test_data_loader_kwargs, training=False)
         self.data_loader['tgt_test'] = DefaultDataLoader(self.tgt_file, self.test_data_loader_kwargs, training=False)
 
         for key in self.data_loader:
@@ -234,7 +236,19 @@ class Train:
         self.losses_dict['contrast_loss'] = contrast_loss
 
     def prepare_tgt_conf_dataset(self):
-        self.eval_tgt()
+        src_test_collection = self.collect_samples('src_test')
+        tgt_test_collection = self.collect_samples('tgt_test')
+        self.eval_tgt(tgt_test_collection)
+        tgt_pseudo_label = self.tgt_pseudo_labeler.pseudo_label_tgt(src_test_collection, tgt_test_collection)
+        compute_accuracy(tgt_pseudo_label, tgt_test_collection['true_labels'],
+                         acc_metric=self.acc_metric, print_result=True)
+
+        tgt_pseudo_confidences, tgt_pseudo_predictions = torch.max(tgt_pseudo_label, 1)
+        tgt_conf_mask = tgt_pseudo_confidences.ge(self.thresh)
+        tgt_conf_indices = torch.tensor(range(self.tgt_size)).cuda()[tgt_conf_mask].tolist()
+        tgt_conf_predictions = tgt_pseudo_predictions[tgt_conf_mask].tolist()
+        self.tgt_conf_pair = list(zip(tgt_conf_indices, tgt_conf_predictions))
+
         self.data_loader['tgt_conf'] = ConfidentDataLoader(
             self.tgt_file, self.train_data_loader_kwargs, self.tgt_conf_pair, self.min_conf_classes, training=True)
 
@@ -243,45 +257,43 @@ class Train:
         else:
             self.data_iterator['tgt_conf'] = iter(self.data_loader['tgt_conf'])
 
-    def eval_tgt(self):
-        self.model_ema.eval()
-        with torch.no_grad():
-            self.model_ema.set_bn_domain(domain=1)
-            tgt_logits = []
-            tgt_true_labels = []
-            tgt_conf_indices = []
-            tgt_conf_predictions = []
-
-            for tgt_data in tqdm.tqdm(
-                    self.data_loader['tgt_test'], desc='Target labeling', leave=False, ascii=True):
-                tgt_inputs, tgt_labels, tgt_indices \
-                    = tgt_data['image'].cuda(), tgt_data['true_label'].cuda(), tgt_data['index'].cuda()
-                tgt_end_points = self.model_ema(tgt_inputs)
-
-                tgt_logits += [tgt_end_points['logits']]
-                tgt_true_labels += [tgt_labels]
-
-                tgt_conf_mask = tgt_end_points['confidences'].ge(self.thresh)
-                tgt_conf_indices += [tgt_indices[tgt_conf_mask]]
-                tgt_conf_predictions += [tgt_end_points['predictions'][tgt_conf_mask]]
-
-            tgt_logits = torch.cat(tgt_logits, dim=0)
-            tgt_true_labels = torch.cat(tgt_true_labels, dim=0)
-            tgt_conf_indices = torch.cat(tgt_conf_indices, dim=0).tolist()
-            tgt_conf_predictions = torch.cat(tgt_conf_predictions, dim=0).tolist()
-
-        print('tgt_conf_indices, tgt_conf_predictions')
-        assert len(tgt_conf_indices) == len(tgt_conf_predictions)
-        print(f'len(tgt_conf_indices): {len(tgt_conf_indices)}')
-
-        tgt_test_acc = compute_accuracy(tgt_logits, tgt_true_labels, acc_metric=self.acc_metric, print_result=True)
+    def eval_tgt(self, tgt_test_collection):
+        tgt_test_acc = compute_accuracy(tgt_test_collection['logits'], tgt_test_collection['true_labels'],
+                                        acc_metric=self.acc_metric, print_result=True)
         tgt_test_acc = round(tgt_test_acc, 3)
         self.acc_dict['tgt_test_acc'] = tgt_test_acc
         self.acc_dict['tgt_best_test_acc'] = max(self.acc_dict['tgt_best_test_acc'], tgt_test_acc)
-
         self.print_acc()
 
-        self.tgt_conf_pair = list(zip(tgt_conf_indices, tgt_conf_predictions))
+    def collect_samples(self, data_name):
+        assert 'src' in data_name or 'tgt' in data_name
+        if 'src' in data_name:
+            domain = 0
+        else:
+            domain = 1
+
+        self.model_ema.eval()
+        with torch.no_grad():
+            self.model_ema.set_bn_domain(domain=domain)
+            sample_collection = {}
+            sample_features = []
+            sample_logits = []
+            sample_true_labels = []
+
+            # TODO change tgt_test to other transforms for tgt pseudo labeling.
+            for sample_data in tqdm.tqdm(self.data_loader[data_name], desc=data_name, leave=False, ascii=True):
+                batch_inputs, batch_true_labels = sample_data['image'].cuda(), sample_data['true_label'].cuda()
+                batch_end_points = self.model_ema(batch_inputs)
+
+                sample_features += [batch_end_points['features']]
+                sample_logits += [batch_end_points['logits']]
+                sample_true_labels += [batch_true_labels]
+
+            sample_collection['features'] = torch.cat(sample_features, dim=0)
+            sample_collection['logits'] = torch.cat(sample_logits, dim=0)
+            sample_collection['true_labels'] = torch.cat(sample_true_labels, dim=0)
+
+        return sample_collection
 
     def get_sample(self, data_name):
         try:
