@@ -1,3 +1,4 @@
+import argparse
 import queue
 
 import matplotlib
@@ -196,7 +197,10 @@ def compute_accuracy(logits, true_labels, acc_metric='total_mean', print_result=
     assert logits.size(0) == true_labels.size(0)
     if acc_metric == 'total_mean':
         predictions = torch.max(logits, dim=1)[1]
-        return 100.0 * (predictions == true_labels).sum().item() / logits.size(0)
+        accuracy = 100.0 * (predictions == true_labels).sum().item() / logits.size(0)
+        if print_result:
+            print(accuracy)
+        return accuracy
     elif acc_metric == 'class_mean':
         num_classes = logits.size(1)
         predictions = torch.max(logits, dim=1)[1]
@@ -217,3 +221,20 @@ def compute_accuracy(logits, true_labels, acc_metric='total_mean', print_result=
         return np.mean(class_accuracies)
     else:
         raise ValueError(f'acc_metric, {acc_metric} is not available.')
+
+
+def to_one_hot(label, num_classes):
+    identity = torch.eye(num_classes).cuda()
+    one_hot = torch.index_select(identity, 0, label)
+    return one_hot
+
+
+def str2bool(v):
+    if isinstance(v, bool):
+        return v
+    if v.lower() in ('yes', 'true', 't', 'y', '1'):
+        return True
+    elif v.lower() in ('no', 'false', 'f', 'n', '0'):
+        return False
+    else:
+        raise argparse.ArgumentTypeError('Boolean value expected.')

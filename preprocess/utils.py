@@ -27,21 +27,21 @@ def class_uniform_rearranger(images):
     sorted_images = {}
     rearranged_images = []
     min_class_len = len(images)
-    print(f'len(target_classes): {len(target_classes)}')
+    # print(f'len(target_classes): {len(target_classes)}')
 
     for target_class in target_classes:
         sorted_images[target_class] = [(path, target) for (path, target) in images if target == target_class]
         random.shuffle(sorted_images[target_class])
         min_class_len = min(min_class_len, len(sorted_images[target_class]))
-        print(f'class {target_class}: {len(sorted_images[target_class])}')
+        # print(f'class {target_class}: {len(sorted_images[target_class])}')
 
-    print(f'min_class_len: {min_class_len}')
+    # print(f'min_class_len: {min_class_len}')
 
     for _ in range(min_class_len):
         for target_class in target_classes:
             rearranged_images.append(sorted_images[target_class].pop())
 
-    print(f'len(rearranged_images): {len(rearranged_images)}')
+    # print(f'len(rearranged_images): {len(rearranged_images)}')
 
     return rearranged_images
 

@@ -1,56 +1,21 @@
 data:
-  dataset_root: '/home/omega/datasets'
   dataset:
     office:
-      network: resnet50
       num_classes: 31
-      #      bottleneck_dim: 1024
       iterations_per_epoch: 10
       acc_metric: total_mean
 
     office-home:
-      network: resnet50
       num_classes: 65
-      #      bottleneck_dim: 2048
       iterations_per_epoch: 50
       acc_metric: total_mean
 
     image-clef:
-      network: resnet50
       num_classes: 12
-      #      bottleneck_dim: 1024
       iterations_per_epoch: 10
       acc_metric: total_mean
 
     visda:
-      network: resnet50
       num_classes: 12
-      #      bottleneck_dim: 1024 # TODO
       iterations_per_epoch: 100
       acc_metric: class_mean
-
-optimizer:
-  init_lr: 0.001 # 0.004
-  optim:
-    type: sgd
-    params:
-      lr: 0.001 # 0.004
-      momentum: 0.9
-      weight_decay: 0.0005
-      nesterov: True
-
-  lr_scheduler:
-    type: inv
-    gamma: 0.001 # 0.0005
-    decay_rate: 0.75 # 2.25
-
-log:
-  log_dir: 'logs'
-  log_summary_interval: 10
-  log_image_interval: 1000
-  eval_interval: 1000
-  num_proj_samples: 384
-
-train:
-  max_iteration: 40000 # 100000
-

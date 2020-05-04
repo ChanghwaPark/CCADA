@@ -15,8 +15,8 @@ _NORMALIZE = albumentations.augmentations.transforms.Normalize(mean=[0.485, 0.45
 # using albumentations
 def get_transform(training):
     if training:
-        crop_function = albumentations.RandomResizedCrop(_CROP_SIZE, _CROP_SIZE)  # TODO
-        # crop_function = albumentations.RandomCrop(_CROP_SIZE, _CROP_SIZE)
+        crop_function = albumentations.RandomCrop(_CROP_SIZE, _CROP_SIZE)
+        # crop_function = albumentations.RandomResizedCrop(_CROP_SIZE, _CROP_SIZE)  # TODO
         # crop_function = albumentations.CenterCrop(_CROP_SIZE, _CROP_SIZE)
 
         return albumentations.Compose([albumentations.Resize(_RESIZE_SIZE, _RESIZE_SIZE),
@@ -70,14 +70,15 @@ class UniformDataLoader(BaseDataLoader):
 
 
 class ConfidentDataLoader(BaseDataLoader):
-    def __init__(self, summary_file, data_loader_kwargs, conf_pair, min_conf_classes, training=True):
+    def __init__(self, summary_file, data_loader_kwargs, conf_pair, min_conf_classes, min_conf_samples, training=True):
         super().__init__(summary_file, data_loader_kwargs, training=training)
         self.conf_pair = conf_pair
         self.min_conf_classes = min_conf_classes
+        self.min_conf_samples = min_conf_samples
         self.construct_data_loader()
 
     def construct_data_loader(self):
-        self.dataset = ConfidentDataset(self.summary_file, self.conf_pair, self.min_conf_classes,
+        self.dataset = ConfidentDataset(self.summary_file, self.conf_pair, self.min_conf_classes, self.min_conf_samples,
                                         transform=self.transformer)
         if self.dataset.conf_images is None:
             self.data_loader = None

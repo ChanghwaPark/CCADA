@@ -4,23 +4,16 @@ This code is based on https://github.com/Philip-Bachman/amdim-public/blob/master
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
+
+from model.utils import tanh_clip
 
 
-def tanh_clip(x, clip_val=10.):
-    """
-    soft clip values to the range [-clip_val, +clip_val]
-    """
-    if clip_val is not None:
-        x_clip = clip_val * torch.tanh((1. / clip_val) * x)
-    else:
-        x_clip = x
-    return x_clip
-
-
-class LossMultiNCE(nn.Module):
-    def __init__(self, tclip=10.):
-        super(LossMultiNCE, self).__init__()
+class InfoNCELoss(nn.Module):
+    def __init__(self, tclip=10., feat_normalize=False):
+        super(InfoNCELoss, self).__init__()
         self.tclip = tclip
+        self.feat_normalize = feat_normalize
 
     def forward(self, r_src, r_tgt, pos_matrix, neg_matrix):
         """
@@ -34,18 +27,24 @@ class LossMultiNCE(nn.Module):
               query_to_key_loss  : scalar
               contrast_norm_loss : scalar
         """
-        r_tgt = r_tgt.transpose(1, 0)
         n_rkhs = r_src.size(1)
-        # neg_matrix = 1. - pos_matrix
 
-        # compute src->trg raw scores for batch
-        # (n_batch, n_keys)
-        raw_scores = torch.mm(r_src, r_tgt).float()
+        if self.feat_normalize:
+            r_src = F.normalize(r_src, dim=1)
+            r_tgt = F.normalize(r_tgt, dim=1)
 
+            # compute src->trg raw scores for batch
         # (n_batch, n_keys)
-        raw_scores = raw_scores / n_rkhs ** 0.5
-        contrast_norm_loss = 5e-2 * (raw_scores ** 2.).mean()  # TODO
-        raw_scores = tanh_clip(raw_scores, clip_val=self.tclip)
+        raw_scores = torch.mm(r_src, r_tgt.transpose(0, 1)).float()
+
+        if self.feat_normalize:
+            raw_scores *= self.tclip
+            contrast_norm_loss = 0.
+        else:
+            # (n_batch, n_keys)
+            raw_scores = raw_scores / n_rkhs ** 0.5
+            contrast_norm_loss = 5e-2 * (raw_scores ** 2.).mean()
+            raw_scores = tanh_clip(raw_scores, clip_val=self.tclip)
 
         '''
         pos_scores includes scores for all the positive samples

@@ -1,3 +1,4 @@
+import torch
 import torch.nn as nn
 from torch.nn import init
 
@@ -65,3 +66,24 @@ class BatchNormDomain(DomainModule):
     def forward(self, x):
         out = self.bn_domain[str(self.domain)](x)
         return out
+
+
+def tanh_clip(x, clip_val=10.):
+    """
+    soft clip values to the range [-clip_val, +clip_val]
+    """
+    if clip_val is not None:
+        x_clip = clip_val * torch.tanh((1. / clip_val) * x)
+    else:
+        x_clip = x
+    return x_clip
+
+
+def initialize_layer(layer):
+    for m in layer.modules():
+        if isinstance(m, (nn.BatchNorm2d, nn.BatchNorm1d)):
+            nn.init.constant_(m.weight, 1)
+            nn.init.constant_(m.bias, 0)
+        elif isinstance(m, nn.Linear):
+            nn.init.kaiming_normal_(m.weight)
+            nn.init.constant_(m.bias, 0)

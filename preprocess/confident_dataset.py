@@ -3,7 +3,7 @@ from .utils import cv_loader, class_uniform_rearranger, get_classes_set
 
 
 class ConfidentDataset(BaseDataset):
-    def __init__(self, summary_file, conf_pair, min_conf_classes,
+    def __init__(self, summary_file, conf_pair, min_conf_classes, min_conf_samples,
                  labels=None, transform=None, target_transform=None, loader=cv_loader):
         super().__init__(summary_file,
                          labels=labels, transform=transform, target_transform=target_transform, loader=loader)
@@ -16,12 +16,19 @@ class ConfidentDataset(BaseDataset):
 
         # check if the pseudo labels set have min_conf_classes at least.
         conf_classes = get_classes_set(conf_images)
+        trimmed_conf_images = []
+        for conf_class in conf_classes[:]:
+            cur_class_images = [(path, target) for (path, target) in conf_images if target == conf_class]
+            if len(cur_class_images) < min_conf_samples:
+                conf_classes.remove(conf_class)
+            else:
+                trimmed_conf_images.extend(cur_class_images)
         if len(conf_classes) < min_conf_classes:
             print(f'len(conf_classes), {len(conf_classes)} < min_conf_classes, {min_conf_classes}')
             self.conf_images = None
         else:
             # rearrange confident images to be class-wisely uniform
-            self.conf_images = class_uniform_rearranger(conf_images)
+            self.conf_images = class_uniform_rearranger(trimmed_conf_images)
 
     def __getitem__(self, index):
         """

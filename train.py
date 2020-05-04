@@ -1,3 +1,5 @@
+import math
+
 import torch
 import tqdm
 from torch import nn
@@ -7,15 +9,13 @@ from utils import summary_write_proj, summary_write_fig, AvgMeter, moment_update
 
 
 class Train:
-    def __init__(self, model, model_ema, optimizer, lr_scheduler, group_ratios,
+    def __init__(self, model, model_ema, optimizer, lr_scheduler,
                  summary_writer, src_file, tgt_file, contrast_loss, src_memory, tgt_memory, tgt_pseudo_labeler,
-                 tw=0.0,
                  cw=1.0,
                  thresh=0.9,
                  min_conf_classes=10,
                  max_key_size=16384,
                  num_classes=31,
-                 lr_decay=5,
                  batch_size=36,
                  eval_batch_size=36,
                  num_workers=4,
@@ -23,7 +23,6 @@ class Train:
                  iters_per_epoch=100,
                  log_summary_interval=10,
                  log_image_interval=1000,
-                 eval_interval=1000,
                  num_proj_samples=384,
                  acc_metric='total_mean',
                  alpha=0.99):
@@ -31,7 +30,6 @@ class Train:
         self.model_ema = model_ema
         self.optimizer = optimizer
         self.lr_scheduler = lr_scheduler
-        self.group_ratios = group_ratios
         self.summary_writer = summary_writer
         self.src_file = src_file
         self.tgt_file = tgt_file
@@ -40,12 +38,11 @@ class Train:
         self.src_memory = src_memory
         self.tgt_memory = tgt_memory
         self.tgt_pseudo_labeler = tgt_pseudo_labeler
-        self.tw = tw
         self.cw = cw
         self.thresh = thresh
         self.min_conf_classes = min_conf_classes
+        self.min_conf_samples = math.ceil(batch_size / min_conf_classes)
         self.num_classes = num_classes
-        self.lr_decay = lr_decay
         self.batch_size = batch_size
         self.eval_batch_size = eval_batch_size
         self.num_workers = num_workers
@@ -53,7 +50,6 @@ class Train:
         self.iters_per_epoch = iters_per_epoch
         self.log_summary_interval = log_summary_interval
         self.log_image_interval = log_image_interval
-        self.eval_interval = eval_interval
         self.num_proj_samples = num_proj_samples
         self.acc_metric = acc_metric
         self.alpha = alpha
@@ -131,8 +127,9 @@ class Train:
 
     def train_step(self):
         # update the learning rate of the optimizer
-        self.optimizer = \
-            self.lr_scheduler.next_optimizer(self.group_ratios, self.optimizer, self.iteration / self.lr_decay)
+        # self.optimizer = \
+        #     self.lr_scheduler.next_optimizer(self.group_ratios, self.optimizer, self.iteration)
+        self.lr_scheduler.adjust_learning_rate(self.optimizer, self.iteration)
         self.optimizer.zero_grad()
 
         # prepare source batch
@@ -166,24 +163,16 @@ class Train:
                 tgt_end_points_ema = self.model_ema(tgt_inputs)
                 self.tgt_memory.store_keys(tgt_end_points_ema['features'], tgt_pseudo_labels)
 
-            if self.tw > 0:
-                # target pseudo classification
-                self.tgt_supervised_step(tgt_end_points, tgt_pseudo_labels)
-            else:
-                self.losses_dict['tgt_classification_loss'] = 0.
-
             # class contrastive alignment
             self.contrastive_step(src_end_points, src_labels, tgt_end_points, tgt_pseudo_labels)
 
         else:
-            self.losses_dict['tgt_classification_loss'] = 0.
             self.losses_dict['query_to_key_loss'] = 0.
             self.losses_dict['contrast_norm_loss'] = 0.
             self.losses_dict['contrast_loss'] = 0.
 
         self.losses_dict['total_loss'] = \
             self.losses_dict['src_classification_loss'] \
-            + self.tw * self.losses_dict['tgt_classification_loss'] \
             + self.cw * self.losses_dict['contrast_loss']
         self.losses_dict['total_loss'].backward()
         self.optimizer.step()
@@ -201,10 +190,6 @@ class Train:
         # compute source train accuracy
         src_train_accuracy = compute_accuracy(src_end_points['logits'], src_labels, acc_metric=self.acc_metric)
         self.src_train_acc_queue.put(src_train_accuracy)
-
-    def tgt_supervised_step(self, tgt_end_points, tgt_pseudo_labels):
-        tgt_classification_loss = self.class_criterion(tgt_end_points['logits'], tgt_pseudo_labels)
-        self.losses_dict['tgt_classification_loss'] = tgt_classification_loss
 
     def contrastive_step(self, src_end_points, src_labels, tgt_end_points=None, tgt_pseudo_labels=None):
         if tgt_end_points is not None:
@@ -238,19 +223,22 @@ class Train:
     def prepare_tgt_conf_dataset(self):
         src_test_collection = self.collect_samples('src_test')
         tgt_test_collection = self.collect_samples('tgt_test')
+        tgt_pseudo_label, tgt_pseudo_confidences = self.tgt_pseudo_labeler.pseudo_label_tgt(src_test_collection,
+                                                                                            tgt_test_collection)
+        tgt_pseudo_acc = compute_accuracy(tgt_pseudo_label, tgt_test_collection['true_labels'],
+                                          acc_metric=self.acc_metric, print_result=False)
+        self.acc_dict['tgt_pseudo_acc'] = tgt_pseudo_acc
         self.eval_tgt(tgt_test_collection)
-        tgt_pseudo_label = self.tgt_pseudo_labeler.pseudo_label_tgt(src_test_collection, tgt_test_collection)
-        compute_accuracy(tgt_pseudo_label, tgt_test_collection['true_labels'],
-                         acc_metric=self.acc_metric, print_result=True)
 
-        tgt_pseudo_confidences, tgt_pseudo_predictions = torch.max(tgt_pseudo_label, 1)
+        tgt_pseudo_predictions = torch.max(tgt_pseudo_label, 1)[1]
         tgt_conf_mask = tgt_pseudo_confidences.ge(self.thresh)
         tgt_conf_indices = torch.tensor(range(self.tgt_size)).cuda()[tgt_conf_mask].tolist()
         tgt_conf_predictions = tgt_pseudo_predictions[tgt_conf_mask].tolist()
         self.tgt_conf_pair = list(zip(tgt_conf_indices, tgt_conf_predictions))
 
         self.data_loader['tgt_conf'] = ConfidentDataLoader(
-            self.tgt_file, self.train_data_loader_kwargs, self.tgt_conf_pair, self.min_conf_classes, training=True)
+            self.tgt_file, self.train_data_loader_kwargs, self.tgt_conf_pair,
+            self.min_conf_classes, self.min_conf_samples, training=True)
 
         if self.data_loader['tgt_conf'].data_loader is None:
             self.data_iterator['tgt_conf'] = None
@@ -259,7 +247,7 @@ class Train:
 
     def eval_tgt(self, tgt_test_collection):
         tgt_test_acc = compute_accuracy(tgt_test_collection['logits'], tgt_test_collection['true_labels'],
-                                        acc_metric=self.acc_metric, print_result=True)
+                                        acc_metric=self.acc_metric, print_result=False)
         tgt_test_acc = round(tgt_test_acc, 3)
         self.acc_dict['tgt_test_acc'] = tgt_test_acc
         self.acc_dict['tgt_best_test_acc'] = max(self.acc_dict['tgt_best_test_acc'], tgt_test_acc)
@@ -280,7 +268,6 @@ class Train:
             sample_logits = []
             sample_true_labels = []
 
-            # TODO change tgt_test to other transforms for tgt pseudo labeling.
             for sample_data in tqdm.tqdm(self.data_loader[data_name], desc=data_name, leave=False, ascii=True):
                 batch_inputs, batch_true_labels = sample_data['image'].cuda(), sample_data['true_label'].cuda()
                 batch_end_points = self.model_ema(batch_inputs)
