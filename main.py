@@ -11,6 +11,7 @@ from lr_schedule import InvScheduler
 from model.contrastive_loss import InfoNCELoss
 from model.key_memory import KeyMemory
 from model.model import Model
+from pseudo_labeler import KMeansPseudoLabeler
 from train import Train
 from utils import configure, get_dataset_name, moment_update, str2bool
 
@@ -84,14 +85,10 @@ parser.add_argument('--num_workers',
                     help='Number of workers')
 
 # InfoNCE loss configurations
-parser.add_argument('--tclip',
+parser.add_argument('--temperature',
                     type=float,
-                    default=20.,
-                    help='Soft clipping range for NCE scores')
-parser.add_argument('--contrast_normalize',
-                    type=str2bool,
-                    default=True,
-                    help='Feature normalization for the contrastive loss computation')
+                    default=0.05,
+                    help='Temperature parameter for InfoNCE loss')
 
 # hyper-parameters
 parser.add_argument('--cw',
@@ -110,28 +107,16 @@ parser.add_argument('--max_key_size',
                     type=int,
                     default=16384,
                     help='Maximum number of key feature size computed in the model')
-parser.add_argument('--pseudo_labeling',
-                    type=str,
-                    default='kmeans',
-                    help='Pseudo labeling method. Choose between ["info", "kmeans", "lp", "classifier"]')
-parser.add_argument('--pseudo_normalize',
-                    type=str2bool,
-                    default=False,
-                    help='Feature normalization for the pseudo labeling. "info" and "lp" use this.')
 
 # model configurations
 parser.add_argument('--network',
                     type=str,
                     default='resnet50',
                     help='Base network architecture')
-parser.add_argument('--bottleneck',
-                    type=str2bool,
-                    default=False,
-                    help='Use bottleneck layer between the base network and the classifier layer.')
-parser.add_argument('--bottleneck_dim',
+parser.add_argument('--contrast_dim',
                     type=int,
-                    default=2048,
-                    help='bottleneck layer dimension')
+                    default=128,
+                    help='contrast layer dimension')
 parser.add_argument('--alpha',
                     type=float,
                     default=0.9,
@@ -191,13 +176,12 @@ def main():
         args.src,
         args.tgt,
         args.network,
-        f"bottleneck_{args.bottleneck}_dim_{args.bottleneck_dim}",
+        f"contrast_dim_{args.contrast_dim}",
+        f"temperature_{args.temperature}",
         f"alpha_{args.alpha}",
-        f"tclip_{args.tclip}_normalize_{args.contrast_normalize}",
         f"cw_{args.cw}",
         f"thresh_{args.thresh}",
         f"min_conf_classes_{args.min_conf_classes}",
-        f"pseudo_labeling_{args.pseudo_labeling}_normalize_{args.pseudo_normalize}",
         f"gpu_{args.gpu}"
     ]
     model_name = "_".join(setup_list)
@@ -220,13 +204,11 @@ def main():
 
     model = Model(base_net=args.network,
                   num_classes=dataset_config.num_classes,
-                  bottleneck=args.bottleneck,
-                  bottleneck_dim=args.bottleneck_dim,
+                  contrast_dim=args.contrast_dim,
                   frozen_layer=args.frozen_layer)
     model_ema = Model(base_net=args.network,
                       num_classes=dataset_config.num_classes,
-                      bottleneck=args.bottleneck,
-                      bottleneck_dim=args.bottleneck_dim,
+                      contrast_dim=args.contrast_dim,
                       frozen_layer=args.frozen_layer)
 
     moment_update(model, model_ema, 0)
@@ -234,31 +216,12 @@ def main():
     model = model.cuda()
     model_ema = model_ema.cuda()
 
-    contrast_loss = InfoNCELoss(tclip=args.tclip, feat_normalize=args.contrast_normalize).cuda()
-    src_memory = KeyMemory(len(open(src_file).readlines()), args.bottleneck_dim).cuda()
-    tgt_memory = KeyMemory(len(open(tgt_file).readlines()), args.bottleneck_dim).cuda()
+    contrast_loss = InfoNCELoss(temperature=args.temperature).cuda()
+    src_memory = KeyMemory(len(open(src_file).readlines()), args.contrast_dim).cuda()
+    tgt_memory = KeyMemory(len(open(tgt_file).readlines()), args.contrast_dim).cuda()
 
-    if args.pseudo_labeling == 'info':
-        from pseudo_labeler import InfoPseudoLabeler
-        tgt_pseudo_labeler = InfoPseudoLabeler(num_classes=dataset_config.num_classes,
-                                               batch_size=args.pseudo_batch_size,
-                                               tclip=args.tclip,
-                                               normalize=args.pseudo_normalize)
-    elif args.pseudo_labeling == 'kmeans':
-        from pseudo_labeler import KMeansPseudoLabeler
-        tgt_pseudo_labeler = KMeansPseudoLabeler(num_classes=dataset_config.num_classes,
-                                                 batch_size=args.pseudo_batch_size)
-    elif args.pseudo_labeling == 'lp':
-        from pseudo_labeler import PropagatePseudoLabeler
-        tgt_pseudo_labeler = PropagatePseudoLabeler(num_classes=dataset_config.num_classes,
-                                                    batch_size=args.pseudo_batch_size,
-                                                    tclip=args.tclip,
-                                                    normalize=args.pseudo_normalize)
-    elif args.pseudo_labeling == 'classifier':
-        from pseudo_labeler import ClassifierPseudoLabeler
-        tgt_pseudo_labeler = ClassifierPseudoLabeler(num_classes=dataset_config.num_classes)
-    else:
-        raise ValueError
+    tgt_pseudo_labeler = KMeansPseudoLabeler(num_classes=dataset_config.num_classes,
+                                             batch_size=args.pseudo_batch_size)
 
     parameters = model.get_parameter_list()
     group_ratios = [parameter['lr'] for parameter in parameters]

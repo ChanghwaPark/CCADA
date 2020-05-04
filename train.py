@@ -144,7 +144,7 @@ class Train:
         with torch.no_grad():
             self.model_ema.set_bn_domain(domain=0)
             src_end_points_ema = self.model_ema(src_inputs)
-            self.src_memory.store_keys(src_end_points_ema['features'], src_labels)
+            self.src_memory.store_keys(src_end_points_ema['contrast_features'], src_labels)
 
         # source classification
         self.src_supervised_step(src_end_points, src_labels)
@@ -161,14 +161,12 @@ class Train:
             with torch.no_grad():
                 self.model_ema.set_bn_domain(domain=1)
                 tgt_end_points_ema = self.model_ema(tgt_inputs)
-                self.tgt_memory.store_keys(tgt_end_points_ema['features'], tgt_pseudo_labels)
+                self.tgt_memory.store_keys(tgt_end_points_ema['contrast_features'], tgt_pseudo_labels)
 
             # class contrastive alignment
             self.contrastive_step(src_end_points, src_labels, tgt_end_points, tgt_pseudo_labels)
 
         else:
-            self.losses_dict['query_to_key_loss'] = 0.
-            self.losses_dict['contrast_norm_loss'] = 0.
             self.losses_dict['contrast_loss'] = 0.
 
         self.losses_dict['total_loss'] = \
@@ -193,10 +191,11 @@ class Train:
 
     def contrastive_step(self, src_end_points, src_labels, tgt_end_points=None, tgt_pseudo_labels=None):
         if tgt_end_points is not None:
-            batch_features = torch.cat([src_end_points['features'], tgt_end_points['features']], dim=0)
+            batch_features = torch.cat([src_end_points['contrast_features'], tgt_end_points['contrast_features']],
+                                       dim=0)
             batch_labels = torch.cat([src_labels, tgt_pseudo_labels], dim=0)
         else:
-            batch_features = src_end_points['features']
+            batch_features = src_end_points['contrast_features']
             batch_labels = src_labels
         assert batch_labels.lt(0).sum().cpu().numpy() == 0
 
@@ -212,12 +211,7 @@ class Train:
         # (batch_size, key_size)
         neg_matrix = (key_labels != batch_labels.unsqueeze(1)).float()
 
-        query_to_key_loss, contrast_norm_loss = \
-            self.contrast_loss(batch_features, key_features, pos_matrix, neg_matrix)
-        self.losses_dict['query_to_key_loss'] = query_to_key_loss
-        self.losses_dict['contrast_norm_loss'] = contrast_norm_loss
-
-        contrast_loss = query_to_key_loss + contrast_norm_loss
+        contrast_loss = self.contrast_loss(batch_features, key_features, pos_matrix, neg_matrix)
         self.losses_dict['contrast_loss'] = contrast_loss
 
     def prepare_tgt_conf_dataset(self):

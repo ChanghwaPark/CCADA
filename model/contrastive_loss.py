@@ -4,16 +4,12 @@ This code is based on https://github.com/Philip-Bachman/amdim-public/blob/master
 
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
-
-from model.utils import tanh_clip
 
 
 class InfoNCELoss(nn.Module):
-    def __init__(self, tclip=10., feat_normalize=False):
+    def __init__(self, temperature=0.1):
         super(InfoNCELoss, self).__init__()
-        self.tclip = tclip
-        self.feat_normalize = feat_normalize
+        self.temperature = temperature
 
     def forward(self, r_src, r_tgt, pos_matrix, neg_matrix):
         """
@@ -27,36 +23,21 @@ class InfoNCELoss(nn.Module):
               query_to_key_loss  : scalar
               contrast_norm_loss : scalar
         """
-        n_rkhs = r_src.size(1)
-
-        if self.feat_normalize:
-            r_src = F.normalize(r_src, dim=1)
-            r_tgt = F.normalize(r_tgt, dim=1)
-
-            # compute src->trg raw scores for batch
+        # compute src->trg raw scores for batch
         # (n_batch, n_keys)
         raw_scores = torch.mm(r_src, r_tgt.transpose(0, 1)).float()
-
-        if self.feat_normalize:
-            raw_scores *= self.tclip
-            contrast_norm_loss = 0.
-        else:
-            # (n_batch, n_keys)
-            raw_scores = raw_scores / n_rkhs ** 0.5
-            contrast_norm_loss = 5e-2 * (raw_scores ** 2.).mean()
-            raw_scores = tanh_clip(raw_scores, clip_val=self.tclip)
+        raw_scores /= self.temperature
 
         '''
         pos_scores includes scores for all the positive samples
         neg_scores includes scores for all the negative samples, with
-        scores for positive samples set to the min score (-self.tclip here)
+        scores for positive samples set to the min score (-1 / self.temperature here)
         '''
         # (n_batch, n_keys)
         pos_scores = (pos_matrix * raw_scores)
 
         # (n_batch, n_keys)
-        # neg_scores = (neg_matrix * raw_scores) - (pos_matrix * self.tclip)
-        neg_scores = (neg_matrix * raw_scores) - ((1. - neg_matrix) * self.tclip)
+        neg_scores = (neg_matrix * raw_scores) - ((1. - neg_matrix) / self.temperature)
 
         '''
         for each set of positive examples P_i, compute the max over scores
@@ -87,6 +68,6 @@ class InfoNCELoss(nn.Module):
         # (n_batch, n_keys)
         nce_scores = pos_matrix * (pos_shiftexp - all_logsumexp)
 
-        query_to_key_loss = -nce_scores.sum() / pos_matrix.sum()
+        contrast_loss = -nce_scores.sum() / pos_matrix.sum()
 
-        return query_to_key_loss, contrast_norm_loss
+        return contrast_loss
