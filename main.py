@@ -49,7 +49,7 @@ parser.add_argument('--pseudo_batch_size',
                     help='Batch size for pseudo labeling')
 parser.add_argument('--max_iterations',
                     type=int,
-                    default=10000,
+                    default=40000,
                     help='Maximum number of iterations')
 
 # logging configurations
@@ -93,7 +93,7 @@ parser.add_argument('--temperature',
 # hyper-parameters
 parser.add_argument('--cw',
                     type=float,
-                    default=1.0,
+                    default=0.5,
                     help='Weight for NCE contrast loss')
 parser.add_argument('--thresh',
                     type=float,
@@ -111,11 +111,11 @@ parser.add_argument('--max_key_size',
 # model configurations
 parser.add_argument('--network',
                     type=str,
-                    default='resnet50',
+                    default='resnet101', # TODO
                     help='Base network architecture')
 parser.add_argument('--contrast_dim',
                     type=int,
-                    default=128,
+                    default=512,
                     help='contrast layer dimension')
 parser.add_argument('--alpha',
                     type=float,
@@ -155,12 +155,17 @@ parser.add_argument('--lr_scheduler',
                     help='Learning rate scheduler type')
 parser.add_argument('--gamma',
                     type=float,
-                    default=0.001,  # 0.0005
+                    default=0.0005,  # 0.001 TODO
                     help='Inv learning rate scheduler parameter, gamma')
 parser.add_argument('--decay_rate',
                     type=float,
-                    default=0.75,  # 2.25
+                    default=2.25,  # 0.75 TODO
                     help='Inv learning rate scheduler parameter, decay rate')
+
+parser.add_argument('--sigma',
+                    type=float,
+                    default=0.001,
+                    help='Sigma square value for computing k-means clustering probabilities')
 
 
 def main():
@@ -217,11 +222,12 @@ def main():
     model_ema = model_ema.cuda()
 
     contrast_loss = InfoNCELoss(temperature=args.temperature).cuda()
-    src_memory = KeyMemory(len(open(src_file).readlines()), args.contrast_dim).cuda()
-    tgt_memory = KeyMemory(len(open(tgt_file).readlines()), args.contrast_dim).cuda()
+    src_memory = KeyMemory(args.max_key_size, args.contrast_dim).cuda()
+    tgt_memory = KeyMemory(args.max_key_size, args.contrast_dim).cuda()
 
     tgt_pseudo_labeler = KMeansPseudoLabeler(num_classes=dataset_config.num_classes,
-                                             batch_size=args.pseudo_batch_size)
+                                             batch_size=args.pseudo_batch_size,
+                                             sigma=args.sigma)
 
     parameters = model.get_parameter_list()
     group_ratios = [parameter['lr'] for parameter in parameters]
@@ -243,7 +249,6 @@ def main():
                     cw=args.cw,
                     thresh=args.thresh,
                     min_conf_classes=args.min_conf_classes,
-                    max_key_size=args.max_key_size,
                     num_classes=dataset_config.num_classes,
                     batch_size=args.batch_size,
                     eval_batch_size=args.eval_batch_size,

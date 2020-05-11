@@ -5,6 +5,7 @@ from torch.utils.data import DataLoader
 
 from .confident_dataset import ConfidentDataset
 from .default_dataset import DefaultDataset
+from .indices_dataset import IndicesDataset
 from .uniform_dataset import UniformDataset
 
 _RESIZE_SIZE = 256
@@ -86,3 +87,17 @@ class ConfidentDataLoader(BaseDataLoader):
             self.data_loader = None
         else:
             self.data_loader = DataLoader(self.dataset, **self.data_loader_kwargs)
+
+
+class NonConfidentDataLoader(BaseDataLoader):
+    def __init__(self, summary_file, data_loader_kwargs, non_conf_indices, training=True):
+        super().__init__(summary_file, data_loader_kwargs, training=training)
+        self.non_conf_indices = non_conf_indices
+        self.construct_data_loader()
+
+    def construct_data_loader(self):
+        if len(self.non_conf_indices) == 0:
+            self.data_loader = None
+            return
+        self.dataset = IndicesDataset(self.summary_file, self.non_conf_indices, transform=self.transformer)
+        self.data_loader = DataLoader(self.dataset, **self.data_loader_kwargs)

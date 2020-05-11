@@ -18,9 +18,10 @@ class BasePseudoLabeler(object):
 
 
 class KMeansPseudoLabeler(BasePseudoLabeler):
-    def __init__(self, num_classes, batch_size=4096, eps=0.005):
+    def __init__(self, num_classes, batch_size=4096, sigma=1.0, eps=0.0005):
         super().__init__(num_classes)
         self.batch_size = batch_size
+        self.sigma = sigma
         self.eps = eps
         self.init_centers = None
         self.centers = None
@@ -130,24 +131,17 @@ class KMeansPseudoLabeler(BasePseudoLabeler):
             mask = (count.unsqueeze(1) > 0).float()
             centers = mask * centers + (1 - mask) * self.init_centers
 
-        dist2center, labels = [], []
+        dist2center = []
         start = 0
-        count = 0
         for N in range(num_split):
             cur_len = min(self.batch_size, num_samples - start)
             cur_feature = tgt_features.narrow(0, start, cur_len)
-            cur_dist2center, cur_labels = self.assign_labels(cur_feature)
-
-            labels_one_hot = to_one_hot(cur_labels, self.num_classes)
-            count += torch.sum(labels_one_hot, dim=0)
+            cur_dist2center, _ = self.assign_labels(cur_feature)
 
             dist2center += [cur_dist2center]
-            labels += [cur_labels]
             start += cur_len
 
-        tgt_pseudo_labels = torch.cat(labels, dim=0)
         tgt_dist2center = torch.cat(dist2center, dim=0)
-        tgt_min_dist2center = torch.min(tgt_dist2center, dim=1)[0]
 
         cluster2label = self.align_centers()
         # reorder the centers
@@ -155,11 +149,13 @@ class KMeansPseudoLabeler(BasePseudoLabeler):
         # re-label the data according to the index
         num_samples = len(tgt_features)
         for k in range(num_samples):
-            tgt_pseudo_labels[k] = cluster2label[tgt_pseudo_labels[k]].item()
+            tgt_dist2center[k] = tgt_dist2center[k][cluster2label]
 
-        tgt_pseudo_labels = to_one_hot(tgt_pseudo_labels, self.num_classes)
+        # dist to probability, self.sigma is actually the square value of sigma
+        tgt_probabilities = F.softmax(- tgt_dist2center ** 2 / (self.sigma * 2), dim=1)
 
-        return tgt_pseudo_labels, (torch.tensor(1.0).cuda() - tgt_min_dist2center)
+        # return torch.tensor(1.0).cuda() - tgt_dist2center
+        return tgt_probabilities
 
 
 class ClassifierPseudoLabeler(BasePseudoLabeler):

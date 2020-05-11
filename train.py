@@ -5,6 +5,7 @@ import tqdm
 from torch import nn
 
 from preprocess.data_provider import DefaultDataLoader, UniformDataLoader, ConfidentDataLoader
+# NonConfidentDataLoader
 from utils import summary_write_proj, summary_write_fig, AvgMeter, moment_update, set_bn_train, compute_accuracy
 
 
@@ -14,7 +15,6 @@ class Train:
                  cw=1.0,
                  thresh=0.9,
                  min_conf_classes=10,
-                 max_key_size=16384,
                  num_classes=31,
                  batch_size=36,
                  eval_batch_size=36,
@@ -34,7 +34,6 @@ class Train:
         self.src_file = src_file
         self.tgt_file = tgt_file
         self.contrast_loss = contrast_loss
-        self.max_key_size = max_key_size
         self.src_memory = src_memory
         self.tgt_memory = tgt_memory
         self.tgt_pseudo_labeler = tgt_pseudo_labeler
@@ -64,6 +63,7 @@ class Train:
         self.src_size = len(open(src_file).readlines())
         self.tgt_size = len(open(tgt_file).readlines())
         self.tgt_conf_pair = None
+        # self.tgt_non_conf_indices = list(range(self.tgt_size))
         self.data_loader = {}
         self.data_iterator = {}
         self.train_data_loader_kwargs = {
@@ -83,6 +83,7 @@ class Train:
     def construct_data_loaders(self):
         self.data_loader['src_train'] = UniformDataLoader(self.src_file, self.train_data_loader_kwargs, training=True)
         self.data_loader['tgt_conf'] = None
+        # self.data_loader['tgt_non_conf'] = None
 
         self.data_loader['src_embed'] = DefaultDataLoader(self.src_file, self.train_data_loader_kwargs, training=False)
         self.data_loader['tgt_embed'] = DefaultDataLoader(self.tgt_file, self.train_data_loader_kwargs, training=False)
@@ -169,6 +170,12 @@ class Train:
         else:
             self.losses_dict['contrast_loss'] = 0.
 
+        # if self.data_loader['tgt_non_conf'].data_loader is not None:
+        #     tgt_data = self.get_sample('tgt_non_conf')
+        #     tgt_inputs = tgt_data['image'].cuda()
+        #
+        #     # model inference
+
         self.losses_dict['total_loss'] = \
             self.losses_dict['src_classification_loss'] \
             + self.cw * self.losses_dict['contrast_loss']
@@ -217,17 +224,16 @@ class Train:
     def prepare_tgt_conf_dataset(self):
         src_test_collection = self.collect_samples('src_test')
         tgt_test_collection = self.collect_samples('tgt_test')
-        tgt_pseudo_label, tgt_pseudo_confidences = self.tgt_pseudo_labeler.pseudo_label_tgt(src_test_collection,
-                                                                                            tgt_test_collection)
-        tgt_pseudo_acc = compute_accuracy(tgt_pseudo_label, tgt_test_collection['true_labels'],
+        tgt_pseudo_probabilities = self.tgt_pseudo_labeler.pseudo_label_tgt(src_test_collection, tgt_test_collection)
+        tgt_pseudo_acc = compute_accuracy(tgt_pseudo_probabilities, tgt_test_collection['true_labels'],
                                           acc_metric=self.acc_metric, print_result=False)
         self.acc_dict['tgt_pseudo_acc'] = tgt_pseudo_acc
         self.eval_tgt(tgt_test_collection)
 
-        tgt_pseudo_predictions = torch.max(tgt_pseudo_label, 1)[1]
+        tgt_pseudo_confidences, tgt_pseudo_labels = torch.max(tgt_pseudo_probabilities, dim=1)
         tgt_conf_mask = tgt_pseudo_confidences.ge(self.thresh)
         tgt_conf_indices = torch.tensor(range(self.tgt_size)).cuda()[tgt_conf_mask].tolist()
-        tgt_conf_predictions = tgt_pseudo_predictions[tgt_conf_mask].tolist()
+        tgt_conf_predictions = tgt_pseudo_labels[tgt_conf_mask].tolist()
         self.tgt_conf_pair = list(zip(tgt_conf_indices, tgt_conf_predictions))
 
         self.data_loader['tgt_conf'] = ConfidentDataLoader(
@@ -238,6 +244,17 @@ class Train:
             self.data_iterator['tgt_conf'] = None
         else:
             self.data_iterator['tgt_conf'] = iter(self.data_loader['tgt_conf'])
+
+        # tgt_non_conf_mask = tgt_pseudo_confidences.lt(self.thresh)
+        # self.tgt_non_conf_indices = torch.tensor(range(self.tgt_size)).cuda()[tgt_non_conf_mask].tolist()
+        #
+        # self.data_loader['tgt_non_conf'] = NonConfidentDataLoader(
+        #     self.tgt_file, self.train_data_loader_kwargs, self.tgt_non_conf_indices, training=True)
+        #
+        # if self.data_loader['tgt_non_conf'].data_loader is None:
+        #     self.data_iterator['tgt_non_conf'] = None
+        # else:
+        #     self.data_iterator['tgt_non_conf'] = iter(self.data_loader['tgt_non_conf'])
 
     def eval_tgt(self, tgt_test_collection):
         tgt_test_acc = compute_accuracy(tgt_test_collection['logits'], tgt_test_collection['true_labels'],
