@@ -111,11 +111,11 @@ parser.add_argument('--max_key_size',
 # model configurations
 parser.add_argument('--network',
                     type=str,
-                    default='resnet101', # TODO
+                    default='resnet101',  # TODO
                     help='Base network architecture')
 parser.add_argument('--contrast_dim',
                     type=int,
-                    default=512,
+                    default=256,
                     help='contrast layer dimension')
 parser.add_argument('--alpha',
                     type=float,
@@ -161,11 +161,6 @@ parser.add_argument('--decay_rate',
                     type=float,
                     default=2.25,  # 0.75 TODO
                     help='Inv learning rate scheduler parameter, decay rate')
-
-parser.add_argument('--sigma',
-                    type=float,
-                    default=0.001,
-                    help='Sigma square value for computing k-means clustering probabilities')
 
 
 def main():
@@ -226,8 +221,7 @@ def main():
     tgt_memory = KeyMemory(args.max_key_size, args.contrast_dim).cuda()
 
     tgt_pseudo_labeler = KMeansPseudoLabeler(num_classes=dataset_config.num_classes,
-                                             batch_size=args.pseudo_batch_size,
-                                             sigma=args.sigma)
+                                             batch_size=args.pseudo_batch_size)
 
     parameters = model.get_parameter_list()
     group_ratios = [parameter['lr'] for parameter in parameters]

@@ -18,10 +18,9 @@ class BasePseudoLabeler(object):
 
 
 class KMeansPseudoLabeler(BasePseudoLabeler):
-    def __init__(self, num_classes, batch_size=4096, sigma=1.0, eps=0.0005):
+    def __init__(self, num_classes, batch_size=4096, eps=0.0005):
         super().__init__(num_classes)
         self.batch_size = batch_size
-        self.sigma = sigma
         self.eps = eps
         self.init_centers = None
         self.centers = None
@@ -111,7 +110,6 @@ class KMeansPseudoLabeler(BasePseudoLabeler):
 
             centers = 0
             count = 0
-
             start = 0
 
             for _ in range(num_split):
@@ -151,11 +149,7 @@ class KMeansPseudoLabeler(BasePseudoLabeler):
         for k in range(num_samples):
             tgt_dist2center[k] = tgt_dist2center[k][cluster2label]
 
-        # dist to probability, self.sigma is actually the square value of sigma
-        tgt_probabilities = F.softmax(- tgt_dist2center ** 2 / (self.sigma * 2), dim=1)
-
-        # return torch.tensor(1.0).cuda() - tgt_dist2center
-        return tgt_probabilities
+        return torch.tensor(1.0).cuda() - tgt_dist2center
 
 
 class ClassifierPseudoLabeler(BasePseudoLabeler):
@@ -166,8 +160,9 @@ class ClassifierPseudoLabeler(BasePseudoLabeler):
         del src_test_collection
         tgt_logits = tgt_test_collection['logits']
         tgt_pseudo_labels = F.softmax(tgt_logits, dim=1)
-        tgt_pseudo_confidences = torch.max(tgt_pseudo_labels, dim=1)[0]
-        return tgt_pseudo_labels, tgt_pseudo_confidences
+        # tgt_pseudo_confidences = torch.max(tgt_pseudo_labels, dim=1)[0]
+        # return tgt_pseudo_labels, tgt_pseudo_confidences
+        return tgt_pseudo_labels
 
 
 class InfoPseudoLabeler(BasePseudoLabeler):
