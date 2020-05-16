@@ -30,9 +30,15 @@ class BaseDataset(Dataset):
         path, label = images[index]
         image = self.loader(path)
         if self.transform is not None:
-            image = self.transform(image=image)
-            image = image['image']
-        data['image'] = image
+            image_1 = self.transform(image=image)
+            image_1 = image_1['image']
+            image_2 = self.transform(image=image)
+            image_2 = image_2['image']
+        else:
+            image_1 = image
+            image_2 = image
+        data['image_1'] = image_1
+        data['image_2'] = image_2
 
         if self.target_transform is not None:
             label = self.target_transform(label)

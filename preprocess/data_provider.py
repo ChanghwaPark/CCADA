@@ -96,7 +96,7 @@ class NonConfidentDataLoader(BaseDataLoader):
         self.construct_data_loader()
 
     def construct_data_loader(self):
-        if len(self.non_conf_indices) == 0:
+        if len(self.non_conf_indices) < self.data_loader_kwargs['batch_size']:
             self.data_loader = None
             return
         self.dataset = IndicesDataset(self.summary_file, self.non_conf_indices, transform=self.transformer)

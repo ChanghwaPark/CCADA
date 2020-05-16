@@ -1,11 +1,8 @@
-import math
-
 import torch
 import tqdm
 from torch import nn
 
-from preprocess.data_provider import DefaultDataLoader, UniformDataLoader, ConfidentDataLoader
-# NonConfidentDataLoader
+from preprocess.data_provider import DefaultDataLoader, UniformDataLoader, ConfidentDataLoader, NonConfidentDataLoader
 from utils import summary_write_proj, summary_write_fig, AvgMeter, moment_update, set_bn_train, compute_accuracy
 
 
@@ -40,7 +37,8 @@ class Train:
         self.cw = cw
         self.thresh = thresh
         self.min_conf_classes = min_conf_classes
-        self.min_conf_samples = math.ceil(batch_size / min_conf_classes)
+        # self.min_conf_samples = math.ceil(batch_size / min_conf_classes)
+        self.min_conf_samples = 3
         self.num_classes = num_classes
         self.batch_size = batch_size
         self.eval_batch_size = eval_batch_size
@@ -63,7 +61,7 @@ class Train:
         self.src_size = len(open(src_file).readlines())
         self.tgt_size = len(open(tgt_file).readlines())
         self.tgt_conf_pair = None
-        # self.tgt_non_conf_indices = list(range(self.tgt_size))
+        self.tgt_non_conf_indices = list(range(self.tgt_size))
         self.data_loader = {}
         self.data_iterator = {}
         self.train_data_loader_kwargs = {
@@ -83,7 +81,7 @@ class Train:
     def construct_data_loaders(self):
         self.data_loader['src_train'] = UniformDataLoader(self.src_file, self.train_data_loader_kwargs, training=True)
         self.data_loader['tgt_conf'] = None
-        # self.data_loader['tgt_non_conf'] = None
+        self.data_loader['tgt_non_conf'] = None
 
         self.data_loader['src_embed'] = DefaultDataLoader(self.src_file, self.train_data_loader_kwargs, training=False)
         self.data_loader['tgt_embed'] = DefaultDataLoader(self.tgt_file, self.train_data_loader_kwargs, training=False)
@@ -112,7 +110,9 @@ class Train:
         return self.acc_dict['tgt_best_test_acc']
 
     def train_epoch(self):
-        for _ in tqdm.tqdm(range(self.iters_per_epoch), desc='Epoch {:4d}'.format(self.epoch), leave=False, ascii=True):
+        # for _ in tqdm.tqdm(range(self.iters_per_epoch), desc='Epoch {:4d}'.format(self.epoch), leave=False, ascii=True):
+        for _ in tqdm.tqdm(range(len(self.data_loader['tgt_conf'])), desc='Epoch {:4d}'.format(self.epoch), leave=False,
+                           ascii=True):
             self.model.train()
             self.model_ema.eval()
             self.model_ema.apply(set_bn_train)
@@ -135,16 +135,18 @@ class Train:
 
         # prepare source batch
         src_data = self.get_sample('src_train')
-        src_inputs, src_labels = src_data['image'].cuda(), src_data['true_label'].cuda()
+        # src_inputs, src_labels = src_data['image'].cuda(), src_data['true_label'].cuda()
+        src_inputs_1, src_inputs_2, src_labels \
+            = src_data['image_1'].cuda(), src_data['image_2'].cuda(), src_data['true_label'].cuda()
 
         # model inference
         self.model.set_bn_domain(domain=0)
-        src_end_points = self.model(src_inputs)
+        src_end_points = self.model(src_inputs_1)
 
         # update key memory
         with torch.no_grad():
             self.model_ema.set_bn_domain(domain=0)
-            src_end_points_ema = self.model_ema(src_inputs)
+            src_end_points_ema = self.model_ema(src_inputs_2)
             self.src_memory.store_keys(src_end_points_ema['contrast_features'], src_labels)
 
         # source classification
@@ -152,16 +154,18 @@ class Train:
 
         if self.data_loader['tgt_conf'].data_loader is not None:
             tgt_data = self.get_sample('tgt_conf')
-            tgt_inputs, tgt_pseudo_labels = tgt_data['image'].cuda(), tgt_data['pseudo_label'].cuda()
+            # tgt_inputs, tgt_pseudo_labels = tgt_data['image'].cuda(), tgt_data['pseudo_label'].cuda()
+            tgt_inputs_1, tgt_inputs_2, tgt_pseudo_labels \
+                = tgt_data['image_1'].cuda(), tgt_data['image_2'].cuda(), tgt_data['pseudo_label'].cuda()
 
             # model inference
             self.model.set_bn_domain(domain=1)
-            tgt_end_points = self.model(tgt_inputs)
+            tgt_end_points = self.model(tgt_inputs_1)
 
             # update key memory
             with torch.no_grad():
                 self.model_ema.set_bn_domain(domain=1)
-                tgt_end_points_ema = self.model_ema(tgt_inputs)
+                tgt_end_points_ema = self.model_ema(tgt_inputs_2)
                 self.tgt_memory.store_keys(tgt_end_points_ema['contrast_features'], tgt_pseudo_labels)
 
             # class contrastive alignment
@@ -170,11 +174,18 @@ class Train:
         else:
             self.losses_dict['contrast_loss'] = 0.
 
-        # if self.data_loader['tgt_non_conf'].data_loader is not None:
-        #     tgt_data = self.get_sample('tgt_non_conf')
-        #     tgt_inputs = tgt_data['image'].cuda()
-        #
-        #     # model inference
+        # pass non conf data for batch norm layers
+        if self.data_loader['tgt_non_conf'].data_loader is not None:
+            tgt_data = self.get_sample('tgt_non_conf')
+            tgt_inputs_1, tgt_inputs_2 = tgt_data['image_1'].cuda(), tgt_data['image_2'].cuda()
+
+            # model inference
+            self.model.set_bn_domain(domain=1)
+            self.model(tgt_inputs_1)
+
+            with torch.no_grad():
+                self.model_ema.set_bn_domain(domain=1)
+                self.model_ema(tgt_inputs_2)
 
         self.losses_dict['total_loss'] = \
             self.losses_dict['src_classification_loss'] \
@@ -221,6 +232,30 @@ class Train:
         contrast_loss = self.contrast_loss(batch_features, key_features, pos_matrix, neg_matrix)
         self.losses_dict['contrast_loss'] = contrast_loss
 
+    # def non_conf_contrastive_step(self, tgt_end_points, tgt_end_points_ema):
+    #     batch_features = tgt_end_points['contrast_features']
+    #     batch_features_ema = tgt_end_points_ema['contrast_features']
+    #     batch_size = batch_features.size(0)
+    #
+    #     src_key_features, _ = self.src_memory.get_queue()
+    #     tgt_key_features, _ = self.tgt_memory.get_queue()
+    #
+    #     key_features = torch.cat([src_key_features, tgt_key_features], dim=0)
+    #     key_size = key_features.size(0)
+    #
+    #     key_features = torch.cat([batch_features_ema, key_features], dim=0)
+    #
+    #     # (batch_size, batch_size + key_size)
+    #     pos_matrix_batch = torch.eye(batch_size).float().cuda()
+    #     pos_matrix_key = torch.zeros(batch_size, key_size).float().cuda()
+    #     pos_matrix = torch.cat([pos_matrix_batch, pos_matrix_key], dim=1)
+    #
+    #     # (batch_size, batch_size + key_size)
+    #     neg_matrix = 1.0 - pos_matrix
+    #
+    #     non_conf_contrast_loss = self.contrast_loss(batch_features, key_features, pos_matrix, neg_matrix)
+    #     self.losses_dict['non_conf_contrast_loss'] = non_conf_contrast_loss
+
     def prepare_tgt_conf_dataset(self):
         src_test_collection = self.collect_samples('src_test')
         tgt_test_collection = self.collect_samples('tgt_test')
@@ -245,16 +280,16 @@ class Train:
         else:
             self.data_iterator['tgt_conf'] = iter(self.data_loader['tgt_conf'])
 
-        # tgt_non_conf_mask = tgt_pseudo_confidences.lt(self.thresh)
-        # self.tgt_non_conf_indices = torch.tensor(range(self.tgt_size)).cuda()[tgt_non_conf_mask].tolist()
-        #
-        # self.data_loader['tgt_non_conf'] = NonConfidentDataLoader(
-        #     self.tgt_file, self.train_data_loader_kwargs, self.tgt_non_conf_indices, training=True)
-        #
-        # if self.data_loader['tgt_non_conf'].data_loader is None:
-        #     self.data_iterator['tgt_non_conf'] = None
-        # else:
-        #     self.data_iterator['tgt_non_conf'] = iter(self.data_loader['tgt_non_conf'])
+        tgt_non_conf_mask = tgt_pseudo_confidences.lt(self.thresh)
+        self.tgt_non_conf_indices = torch.tensor(range(self.tgt_size)).cuda()[tgt_non_conf_mask].tolist()
+
+        self.data_loader['tgt_non_conf'] = NonConfidentDataLoader(
+            self.tgt_file, self.train_data_loader_kwargs, self.tgt_non_conf_indices, training=True)
+
+        if self.data_loader['tgt_non_conf'].data_loader is None:
+            self.data_iterator['tgt_non_conf'] = None
+        else:
+            self.data_iterator['tgt_non_conf'] = iter(self.data_loader['tgt_non_conf'])
 
     def eval_tgt(self, tgt_test_collection):
         tgt_test_acc = compute_accuracy(tgt_test_collection['logits'], tgt_test_collection['true_labels'],
@@ -280,7 +315,7 @@ class Train:
             sample_true_labels = []
 
             for sample_data in tqdm.tqdm(self.data_loader[data_name], desc=data_name, leave=False, ascii=True):
-                batch_inputs, batch_true_labels = sample_data['image'].cuda(), sample_data['true_label'].cuda()
+                batch_inputs, batch_true_labels = sample_data['image_1'].cuda(), sample_data['true_label'].cuda()
                 batch_end_points = self.model_ema(batch_inputs)
 
                 sample_features += [batch_end_points['features']]
@@ -313,9 +348,9 @@ class Train:
 
     def log_image_writer(self):
         src_data = next(iter(self.data_loader['src_embed']))
-        src_inputs, src_labels = src_data['image'].cuda(), src_data['true_label'].cuda()
+        src_inputs, src_labels = src_data['image_1'].cuda(), src_data['true_label'].cuda()
         tgt_data = next(iter(self.data_loader['tgt_embed']))
-        tgt_inputs, tgt_labels = tgt_data['image'].cuda(), tgt_data['true_label'].cuda()
+        tgt_inputs, tgt_labels = tgt_data['image_1'].cuda(), tgt_data['true_label'].cuda()
         summary_write_fig(self.summary_writer, tag='Source predictions vs. true labels',
                           global_step=self.iteration,
                           model=self.model, images=src_inputs, labels=src_labels, domain=0)

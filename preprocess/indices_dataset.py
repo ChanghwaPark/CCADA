@@ -7,7 +7,7 @@ class IndicesDataset(BaseDataset):
                  labels=None, transform=None, target_transform=None, loader=cv_loader):
         super().__init__(summary_file,
                          labels=labels, transform=transform, target_transform=target_transform, loader=loader)
-        self.indices_images = self.entire_images[indices]
+        self.indices_images = [self.entire_images[index] for index in indices]
 
     def __getitem__(self, index):
         """

@@ -37,11 +37,11 @@ parser.add_argument('--tgt',
 # training configurations
 parser.add_argument('--batch_size',
                     type=int,
-                    default=36,
+                    default=30,
                     help='Batch size for both training and evaluation')
 parser.add_argument('--eval_batch_size',
                     type=int,
-                    default=36,
+                    default=30,
                     help='Batch size for both training and evaluation')
 parser.add_argument('--pseudo_batch_size',
                     type=int,
@@ -101,7 +101,7 @@ parser.add_argument('--thresh',
                     help='Confidence threshold for pseudo labeling target samples')
 parser.add_argument('--min_conf_classes',
                     type=int,
-                    default=8,
+                    default=0,
                     help='Minimum number of confident classes')
 parser.add_argument('--max_key_size',
                     type=int,
@@ -159,7 +159,7 @@ parser.add_argument('--gamma',
                     help='Inv learning rate scheduler parameter, gamma')
 parser.add_argument('--decay_rate',
                     type=float,
-                    default=2.25,  # 0.75 TODO
+                    default=0.75,  # 2.25
                     help='Inv learning rate scheduler parameter, decay rate')
 
 
@@ -178,6 +178,9 @@ def main():
         args.network,
         f"contrast_dim_{args.contrast_dim}",
         f"temperature_{args.temperature}",
+        f"lr_{args.lr}",
+        f"gamma_{args.gamma}",
+        f"decay_rate_{args.decay_rate}",
         f"alpha_{args.alpha}",
         f"cw_{args.cw}",
         f"thresh_{args.thresh}",
