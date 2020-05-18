@@ -3,7 +3,7 @@ from .utils import cv_loader, class_uniform_rearranger, get_classes_set
 
 
 class ConfidentDataset(BaseDataset):
-    def __init__(self, summary_file, conf_pair, min_conf_classes, min_conf_samples,
+    def __init__(self, summary_file, conf_pair, min_conf_samples,
                  labels=None, transform=None, target_transform=None, loader=cv_loader):
         super().__init__(summary_file,
                          labels=labels, transform=transform, target_transform=target_transform, loader=loader)
@@ -23,12 +23,9 @@ class ConfidentDataset(BaseDataset):
                 conf_classes.remove(conf_class)
             else:
                 trimmed_conf_images.extend(cur_class_images)
-        if len(conf_classes) < min_conf_classes:
-            print(f'len(conf_classes), {len(conf_classes)} < min_conf_classes, {min_conf_classes}')
-            self.conf_images = None
-        else:
-            # rearrange confident images to be class-wisely uniform
-            self.conf_images = class_uniform_rearranger(trimmed_conf_images)
+
+        # rearrange confident images to be class-wisely uniform
+        self.conf_images = class_uniform_rearranger(trimmed_conf_images)
 
     def __getitem__(self, index):
         """

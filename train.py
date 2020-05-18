@@ -1,3 +1,5 @@
+import os
+
 import torch
 import tqdm
 from torch import nn
@@ -7,11 +9,10 @@ from utils import summary_write_proj, summary_write_fig, AvgMeter, moment_update
 
 
 class Train:
-    def __init__(self, model, model_ema, optimizer, lr_scheduler,
+    def __init__(self, model, model_ema, optimizer, lr_scheduler, model_dir,
                  summary_writer, src_file, tgt_file, contrast_loss, src_memory, tgt_memory, tgt_pseudo_labeler,
                  cw=1.0,
                  thresh=0.9,
-                 min_conf_classes=10,
                  num_classes=31,
                  batch_size=36,
                  eval_batch_size=36,
@@ -27,6 +28,7 @@ class Train:
         self.model_ema = model_ema
         self.optimizer = optimizer
         self.lr_scheduler = lr_scheduler
+        self.model_dir = model_dir
         self.summary_writer = summary_writer
         self.src_file = src_file
         self.tgt_file = tgt_file
@@ -36,8 +38,6 @@ class Train:
         self.tgt_pseudo_labeler = tgt_pseudo_labeler
         self.cw = cw
         self.thresh = thresh
-        self.min_conf_classes = min_conf_classes
-        # self.min_conf_samples = math.ceil(batch_size / min_conf_classes)
         self.min_conf_samples = 3
         self.num_classes = num_classes
         self.batch_size = batch_size
@@ -110,9 +110,8 @@ class Train:
         return self.acc_dict['tgt_best_test_acc']
 
     def train_epoch(self):
-        # for _ in tqdm.tqdm(range(self.iters_per_epoch), desc='Epoch {:4d}'.format(self.epoch), leave=False, ascii=True):
-        for _ in tqdm.tqdm(range(len(self.data_loader['tgt_conf'])), desc='Epoch {:4d}'.format(self.epoch), leave=False,
-                           ascii=True):
+        cur_epoch_steps = max(self.iters_per_epoch, len(self.data_loader['tgt_conf']))
+        for _ in tqdm.tqdm(range(cur_epoch_steps), desc='Epoch {:4d}'.format(self.epoch), leave=False, ascii=True):
             self.model.train()
             self.model_ema.eval()
             self.model_ema.apply(set_bn_train)
@@ -272,8 +271,7 @@ class Train:
         self.tgt_conf_pair = list(zip(tgt_conf_indices, tgt_conf_predictions))
 
         self.data_loader['tgt_conf'] = ConfidentDataLoader(
-            self.tgt_file, self.train_data_loader_kwargs, self.tgt_conf_pair,
-            self.min_conf_classes, self.min_conf_samples, training=True)
+            self.tgt_file, self.train_data_loader_kwargs, self.tgt_conf_pair, self.min_conf_samples, training=True)
 
         if self.data_loader['tgt_conf'].data_loader is None:
             self.data_iterator['tgt_conf'] = None
@@ -298,6 +296,7 @@ class Train:
         self.acc_dict['tgt_test_acc'] = tgt_test_acc
         self.acc_dict['tgt_best_test_acc'] = max(self.acc_dict['tgt_best_test_acc'], tgt_test_acc)
         self.print_acc()
+        self.save_checkpoint()
 
     def collect_samples(self, data_name):
         assert 'src' in data_name or 'tgt' in data_name
@@ -372,3 +371,7 @@ class Train:
         # show the latest eval_result
         self.acc_dict['src_train_accuracy'] = self.src_train_acc_queue.get_average()
         self.total_progress_bar.write('Iteration {:6d}: '.format(self.iteration) + str(self.acc_dict))
+
+    def save_checkpoint(self):
+        checkpoint_weights = os.path.join(self.model_dir, 'checkpoint_%d_%d.weights' % (self.epoch, self.iteration))
+        torch.save({'weights': self.model.state_dict()}, checkpoint_weights)

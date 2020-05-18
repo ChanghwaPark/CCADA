@@ -44,7 +44,10 @@ class BaseDataLoader(object):
         return iter(self.data_loader)
 
     def __len__(self):
-        return len(self.data_loader)
+        if self.data_loader is None:
+            return 0
+        else:
+            return len(self.data_loader)
 
     def construct_data_loader(self):
         raise NotImplementedError
@@ -71,19 +74,16 @@ class UniformDataLoader(BaseDataLoader):
 
 
 class ConfidentDataLoader(BaseDataLoader):
-    def __init__(self, summary_file, data_loader_kwargs, conf_pair, min_conf_classes, min_conf_samples, training=True):
+    def __init__(self, summary_file, data_loader_kwargs, conf_pair, min_conf_samples, training=True):
         super().__init__(summary_file, data_loader_kwargs, training=training)
         self.conf_pair = conf_pair
-        self.min_conf_classes = min_conf_classes
         self.min_conf_samples = min_conf_samples
         self.construct_data_loader()
 
     def construct_data_loader(self):
-        self.dataset = ConfidentDataset(self.summary_file, self.conf_pair, self.min_conf_classes, self.min_conf_samples,
+        self.dataset = ConfidentDataset(self.summary_file, self.conf_pair, self.min_conf_samples,
                                         transform=self.transformer)
-        if self.dataset.conf_images is None:
-            self.data_loader = None
-        elif len(self.dataset.conf_images) < self.data_loader_kwargs['batch_size']:
+        if len(self.dataset.conf_images) < self.data_loader_kwargs['batch_size']:
             self.data_loader = None
         else:
             self.data_loader = DataLoader(self.dataset, **self.data_loader_kwargs)
@@ -98,6 +98,6 @@ class NonConfidentDataLoader(BaseDataLoader):
     def construct_data_loader(self):
         if len(self.non_conf_indices) < self.data_loader_kwargs['batch_size']:
             self.data_loader = None
-            return
-        self.dataset = IndicesDataset(self.summary_file, self.non_conf_indices, transform=self.transformer)
-        self.data_loader = DataLoader(self.dataset, **self.data_loader_kwargs)
+        else:
+            self.dataset = IndicesDataset(self.summary_file, self.non_conf_indices, transform=self.transformer)
+            self.data_loader = DataLoader(self.dataset, **self.data_loader_kwargs)

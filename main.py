@@ -49,7 +49,7 @@ parser.add_argument('--pseudo_batch_size',
                     help='Batch size for pseudo labeling')
 parser.add_argument('--max_iterations',
                     type=int,
-                    default=40000,
+                    default=80000,
                     help='Maximum number of iterations')
 
 # logging configurations
@@ -99,10 +99,6 @@ parser.add_argument('--thresh',
                     type=float,
                     default=0.9,
                     help='Confidence threshold for pseudo labeling target samples')
-parser.add_argument('--min_conf_classes',
-                    type=int,
-                    default=0,
-                    help='Minimum number of confident classes')
 parser.add_argument('--max_key_size',
                     type=int,
                     default=16384,
@@ -184,7 +180,6 @@ def main():
         f"alpha_{args.alpha}",
         f"cw_{args.cw}",
         f"thresh_{args.thresh}",
-        f"min_conf_classes_{args.min_conf_classes}",
         f"gpu_{args.gpu}"
     ]
     model_name = "_".join(setup_list)
@@ -241,11 +236,10 @@ def main():
                                 group_ratios=group_ratios,
                                 init_lr=args.lr)
 
-    trainer = Train(model, model_ema, optimizer, lr_scheduler,
+    trainer = Train(model, model_ema, optimizer, lr_scheduler, model_dir,
                     summary_writer, src_file, tgt_file, contrast_loss, src_memory, tgt_memory, tgt_pseudo_labeler,
                     cw=args.cw,
                     thresh=args.thresh,
-                    min_conf_classes=args.min_conf_classes,
                     num_classes=dataset_config.num_classes,
                     batch_size=args.batch_size,
                     eval_batch_size=args.eval_batch_size,
