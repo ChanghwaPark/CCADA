@@ -13,6 +13,7 @@ class Train:
                  summary_writer, src_file, tgt_file, contrast_loss, src_memory, tgt_memory, tgt_pseudo_labeler,
                  cw=1.0,
                  thresh=0.9,
+                 min_conf_samples=3,
                  num_classes=31,
                  batch_size=36,
                  eval_batch_size=36,
@@ -38,7 +39,7 @@ class Train:
         self.tgt_pseudo_labeler = tgt_pseudo_labeler
         self.cw = cw
         self.thresh = thresh
-        self.min_conf_samples = 3
+        self.min_conf_samples = min_conf_samples
         self.num_classes = num_classes
         self.batch_size = batch_size
         self.eval_batch_size = eval_batch_size
@@ -294,9 +295,11 @@ class Train:
                                         acc_metric=self.acc_metric, print_result=False)
         tgt_test_acc = round(tgt_test_acc, 3)
         self.acc_dict['tgt_test_acc'] = tgt_test_acc
-        self.acc_dict['tgt_best_test_acc'] = max(self.acc_dict['tgt_best_test_acc'], tgt_test_acc)
+        # self.acc_dict['tgt_best_test_acc'] = max(self.acc_dict['tgt_best_test_acc'], tgt_test_acc)
+        if self.acc_dict['tgt_test_acc'] > self.acc_dict['tgt_best_test_acc']:
+            self.acc_dict['tgt_best_test_acc'] = self.acc_dict['tgt_test_acc']
+            self.save_checkpoint()
         self.print_acc()
-        self.save_checkpoint()
 
     def collect_samples(self, data_name):
         assert 'src' in data_name or 'tgt' in data_name
@@ -375,3 +378,24 @@ class Train:
     def save_checkpoint(self):
         checkpoint_weights = os.path.join(self.model_dir, 'checkpoint_%d_%d.weights' % (self.epoch, self.iteration))
         torch.save({'weights': self.model.state_dict()}, checkpoint_weights)
+
+    # def update_classifier(self, tgt_test_collection, tgt_pseudo_labels):
+    #     tgt_test_features = tgt_test_collection['features']
+    #     classifier_optimizer = torch.optim.SGD(list(self.model.classifier_layer.parameters()),
+    #                                            lr=0.01,
+    #                                            momentum=0.9,
+    #                                            weight_decay=0.0005)
+    #     classifier_batch_size = self.tgt_size
+    #     for i in range(10):
+    #         print(self.model.classifier_layer[1].weight.data.mean())
+    #         # tgt_batch_features = tgt_test_features[i * classifier_batch_size:(i + 1) * classifier_batch_size]
+    #         tgt_batch_features = tgt_test_features
+    #         # tgt_batch_pseudo_labels = tgt_pseudo_labels[i * classifier_batch_size:(i + 1) * classifier_batch_size]
+    #         tgt_batch_pseudo_labels = tgt_pseudo_labels
+    #         tgt_batch_logits = self.model.classifier_layer(tgt_batch_features)
+    #         compute_accuracy(tgt_batch_logits, tgt_batch_pseudo_labels, acc_metric=self.acc_metric, print_result=True)
+    #         tgt_classification_loss = self.class_criterion(tgt_batch_logits, tgt_batch_pseudo_labels)
+    #         tgt_classification_loss.backward()
+    #         classifier_optimizer.step()
+    #
+    #     moment_update(self.model, self.model_ema, 0)

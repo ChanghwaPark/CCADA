@@ -103,11 +103,15 @@ parser.add_argument('--max_key_size',
                     type=int,
                     default=16384,
                     help='Maximum number of key feature size computed in the model')
+parser.add_argument('--min_conf_samples',
+                    type=int,
+                    default=3,
+                    help='Minimum number of samples per confident target class')
 
 # model configurations
 parser.add_argument('--network',
                     type=str,
-                    default='resnet101',  # TODO
+                    default='resnet101', # resnet50
                     help='Base network architecture')
 parser.add_argument('--contrast_dim',
                     type=int,
@@ -151,7 +155,7 @@ parser.add_argument('--lr_scheduler',
                     help='Learning rate scheduler type')
 parser.add_argument('--gamma',
                     type=float,
-                    default=0.0005,  # 0.001 TODO
+                    default=0.001,  # 0.0005
                     help='Inv learning rate scheduler parameter, gamma')
 parser.add_argument('--decay_rate',
                     type=float,
@@ -174,12 +178,10 @@ def main():
         args.network,
         f"contrast_dim_{args.contrast_dim}",
         f"temperature_{args.temperature}",
-        f"lr_{args.lr}",
-        f"gamma_{args.gamma}",
-        f"decay_rate_{args.decay_rate}",
         f"alpha_{args.alpha}",
         f"cw_{args.cw}",
         f"thresh_{args.thresh}",
+        f"min_conf_samples_{args.min_conf_samples}",
         f"gpu_{args.gpu}"
     ]
     model_name = "_".join(setup_list)
@@ -240,6 +242,7 @@ def main():
                     summary_writer, src_file, tgt_file, contrast_loss, src_memory, tgt_memory, tgt_pseudo_labeler,
                     cw=args.cw,
                     thresh=args.thresh,
+                    min_conf_samples=args.min_conf_samples,
                     num_classes=dataset_config.num_classes,
                     batch_size=args.batch_size,
                     eval_batch_size=args.eval_batch_size,
