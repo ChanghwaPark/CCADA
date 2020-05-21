@@ -292,7 +292,7 @@ class Train:
 
     def eval_tgt(self, tgt_test_collection):
         tgt_test_acc = compute_accuracy(tgt_test_collection['logits'], tgt_test_collection['true_labels'],
-                                        acc_metric=self.acc_metric, print_result=False)
+                                        acc_metric=self.acc_metric, print_result=True)
         tgt_test_acc = round(tgt_test_acc, 3)
         self.acc_dict['tgt_test_acc'] = tgt_test_acc
         # self.acc_dict['tgt_best_test_acc'] = max(self.acc_dict['tgt_best_test_acc'], tgt_test_acc)

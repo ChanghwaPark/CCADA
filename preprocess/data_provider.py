@@ -16,8 +16,8 @@ _NORMALIZE = albumentations.augmentations.transforms.Normalize(mean=[0.485, 0.45
 # using albumentations
 def get_transform(training):
     if training:
-        # crop_function = albumentations.RandomCrop(_CROP_SIZE, _CROP_SIZE)
-        crop_function = albumentations.RandomResizedCrop(_CROP_SIZE, _CROP_SIZE)  # TODO
+        crop_function = albumentations.RandomCrop(_CROP_SIZE, _CROP_SIZE)
+        # crop_function = albumentations.RandomResizedCrop(_CROP_SIZE, _CROP_SIZE)  # TODO
         # crop_function = albumentations.CenterCrop(_CROP_SIZE, _CROP_SIZE)
 
         return albumentations.Compose([albumentations.Resize(_RESIZE_SIZE, _RESIZE_SIZE),
