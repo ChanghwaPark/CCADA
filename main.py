@@ -1,4 +1,5 @@
 import argparse
+import csv
 import json
 import os
 import shutil
@@ -71,7 +72,7 @@ parser.add_argument('--num_project_samples',
                     help='Number of samples for tensorboard projection')
 parser.add_argument('--acc_file',
                     type=str,
-                    default='result.txt',
+                    default='hyper_search.csv',  # 'result.txt'
                     help='File where accuracies are wrote')
 
 # resource configurations
@@ -111,7 +112,7 @@ parser.add_argument('--min_conf_samples',
 # model configurations
 parser.add_argument('--network',
                     type=str,
-                    default='resnet101', # resnet50
+                    default='resnet101',  # resnet50
                     help='Base network architecture')
 parser.add_argument('--contrast_dim',
                     type=int,
@@ -181,6 +182,7 @@ def main():
         f"alpha_{args.alpha}",
         f"cw_{args.cw}",
         f"thresh_{args.thresh}",
+        f"max_key_size_{args.max_key_size}",
         f"min_conf_samples_{args.min_conf_samples}",
         f"gpu_{args.gpu}"
     ]
@@ -256,9 +258,30 @@ def main():
                     alpha=args.alpha)
 
     tgt_best_acc = trainer.train()
+
+    # write to text file
+    # with open(args.acc_file, 'a') as f:
+    #     f.write(model_name + '     ' + str(tgt_best_acc) + '\n')
+    #     f.close()
+
+    # write to xlsx file
+    write_list = [
+        args.src,
+        args.tgt,
+        args.network,
+        args.contrast_dim,
+        args.temperature,
+        args.alpha,
+        args.cw,
+        args.thresh,
+        args.max_key_size,
+        args.min_conf_samples,
+        args.gpu,
+        tgt_best_acc
+    ]
     with open(args.acc_file, 'a') as f:
-        f.write(model_name + '     ' + str(tgt_best_acc) + '\n')
-        f.close()
+        csv_writer = csv.writer(f)
+        csv_writer.writerow(write_list)
 
 
 if __name__ == '__main__':

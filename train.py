@@ -1,5 +1,5 @@
 import os
-
+import glob
 import torch
 import tqdm
 from torch import nn
@@ -376,6 +376,15 @@ class Train:
         self.total_progress_bar.write('Iteration {:6d}: '.format(self.iteration) + str(self.acc_dict))
 
     def save_checkpoint(self):
+        # delete previous checkpoint
+        prev_checkpoints_list = glob.glob(os.path.join(self.model_dir, '*.weights'))
+        for prev_checkpoint in prev_checkpoints_list:
+            try:
+                os.remove(prev_checkpoint)
+            except OSError:
+                print('Error while deleting previous checkpoint weights.')
+
+        # save new checkpoint weights
         checkpoint_weights = os.path.join(self.model_dir, 'checkpoint_%d_%d.weights' % (self.epoch, self.iteration))
         torch.save({'weights': self.model.state_dict()}, checkpoint_weights)
 

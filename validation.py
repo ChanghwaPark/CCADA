@@ -1,6 +1,6 @@
 import argparse
 import os
-
+import csv
 import numpy as np
 import torch
 import torch.nn as nn
@@ -50,7 +50,7 @@ parser.add_argument('--eval_batch_size',
                     help='Batch size for both training and evaluation')
 parser.add_argument('--max_iterations',
                     type=int,
-                    default=1000,
+                    default=5000,
                     help='Maximum number of iterations')
 parser.add_argument('--print_acc_interval',
                     type=int,
@@ -66,6 +66,10 @@ parser.add_argument('--model_dir',
                     type=str,
                     default=None,
                     help='Model directory for validation')
+parser.add_argument('--output_file',
+                    type=str,
+                    default=None,
+                    help='Output file name')
 
 # resource configurations
 parser.add_argument('--gpu',
@@ -317,6 +321,17 @@ def main():
 
         tgt_test_domain_acc = compute_accuracy(tgt_all_domain_logits, torch.ones(tgt_all_domain_logits.size(0)).cuda(),
                                                acc_metric='total_mean', print_result=True)
+
+    write_list = [
+        args.model_dir,
+        src_test_class_acc,
+        src_test_domain_acc,
+        tgt_test_domain_acc
+    ]
+    # with open('hyper_search_office_home.csv', 'a') as f:
+    with open(args.output_file, 'a') as f:
+        csv_writer = csv.writer(f)
+        csv_writer.writerow(write_list)
 
 
 def get_sample(data_loader, data_iterator, data_name):
