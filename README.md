@@ -2,7 +2,7 @@
 Under review as a conference paper.
 
 ## Introduction
-This is the official implementation of ["Joint Contrastive Learning for Unsupervised Domain Adaptation"](https://arxiv.org/abs/2006.10297). It includes all experiments reported in the paper.
+This is the implementation of ["Joint Contrastive Learning for Unsupervised Domain Adaptation"](https://arxiv.org/abs/2006.10297). It includes all experiments reported in the paper.
 
 ## Requirements
 * Python 3.8
